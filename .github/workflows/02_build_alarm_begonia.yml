@@ -64,10 +64,11 @@ jobs:
       - name: Inject kernel modules
         run: |
           if [ -f pmos-base/modules.tar.gz ]; then
-            sudo mkdir -p mnt/usr/lib/modules
-            sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/modules
-            echo "Modules from tar:"
-            ls mnt/usr/lib/modules/
+            # tar contains modules/6.16.4/... — extract to /usr/lib
+            sudo mkdir -p mnt/usr/lib
+            sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/
+            echo "Modules injected:"
+            ls -R mnt/usr/lib/modules/ 2>/dev/null | head -10
           elif [ -d pmos-base/modules ]; then
             KVER=$(ls pmos-base/modules/ | head -1)
             if [ -n "$KVER" ]; then
@@ -80,19 +81,19 @@ jobs:
       - name: Inject firmware
         run: |
           if [ -f pmos-base/firmware.tar.gz ]; then
-            sudo mkdir -p mnt/usr/lib/firmware
-            sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/firmware
-            echo "Firmware injected"
+            # tar contains firmware/ — extract to /usr/lib
+            sudo mkdir -p mnt/usr/lib
+            sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/
+            echo "Firmware injected:"
+            ls -R mnt/usr/lib/firmware/ 2>/dev/null | head -10
           fi
 
       - name: Configure rootfs
         run: |
-          # Bootstrapping
           sudo mkdir -p mnt/etc
           echo "nameserver 1.1.1.1" | sudo tee mnt/etc/resolv.conf
           echo "nameserver 8.8.8.8" | sudo tee -a mnt/etc/resolv.conf
           
-          # Keyring
           sudo systemd-nspawn -D mnt --pipe sh -c '
             pacman-key --init && pacman-key --populate archlinuxarm
           ' 2>&1 | tail -5 || true
@@ -102,12 +103,12 @@ jobs:
           sudo systemd-nspawn -D mnt --pipe sh -c '
             pacman -Syu --noconfirm --needed \
               sudo vim nano git openssh rsync curl wget \
-              networkmanager \
+              networkmanager systemd-resolved \
               htop tmux \
               2>&1
-          ' 2>&1 | tail -10 || true
+          ' 2>&1 | tail -20 || true
 
-      - name: Enable services
+      - name: Enable services & create user
         run: |
           sudo systemd-nspawn -D mnt --pipe sh -c '
             systemctl set-default multi-user.target
@@ -120,7 +121,7 @@ jobs:
             usermod -aG wheel alarm 2>/dev/null || true
             sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers
             echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
-          ' 2>&1 | tail -5 || true
+          ' 2>&1 | tail -10 || true
 
       - name: Build Arch initramfs
         run: |
@@ -128,7 +129,6 @@ jobs:
             mkdir -p initramfs-work
             cp initramfs/init initramfs-work/init
             
-            # Collect binaries from rootfs
             if [ -f initramfs/files.list ]; then
               while IFS= read -r f; do
                 [ -z "$f" ] && continue
@@ -144,22 +144,26 @@ jobs:
 
       - name: Repack boot.img
         run: |
-          if [ -x boot/repack-bootimg.sh ]; then
-            bash boot/repack-bootimg.sh pmos-base/boot.img arch-initramfs.gz boot-begonia-arch.img
+          if [ -f boot/repack-bootimg.sh ]; then
+            chmod +x boot/repack-bootimg.sh
+            if [ -f arch-initramfs.gz ]; then
+              bash boot/repack-bootimg.sh pmos-base/boot.img arch-initramfs.gz boot-begonia-arch.img
+            else
+              cp pmos-base/boot.img boot-begonia-arch.img
+            fi
           else
-            # Use boot.img as-is if no repack
-            cp pmos-base/boot.img boot-begonia-arch.img 2>/dev/null || true
-            ls -lh boot-begonia-arch.img
+            cp pmos-base/boot.img boot-begonia-arch.img
           fi
+          ls -lh boot-begonia-arch.img
 
       - name: Prepare release
         run: |
           mkdir -p release
-          cp boot-begonia-arch.img release/ 2>/dev/null || true
+          cp boot-begonia-arch.img release/
           
           sudo umount mnt 2>/dev/null || true
-          xz -9 -T 0 -f rootfs.img
-          mv rootfs.img.xz release/rootfs-archlinuxarm-begonia.img.xz
+          xz -9 -T 0 -f rootfs.img && ls -lh rootfs.img.xz
+          mv rootfs.img.xz release/rootfs-archlinuxarm-begonia-console.img.xz
           
           if [ -f flash/flash-begonia-arch.sh ]; then
             cp flash/flash-begonia-arch.sh release/
@@ -170,11 +174,41 @@ jobs:
           ls -lh
           cd ..
 
+      - name: Delete old nightly release
+        run: |
+          # Delete existing nightly release + tag to avoid conflict
+          gh release delete nightly -y --repo ${{ github.repository }} 2>/dev/null || true
+          git push --delete origin nightly 2>/dev/null || true
+          sleep 2
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
           name: "Arch Linux ARM for begonia (nightly)"
+          body: |
+            ## Arch Linux ARM for Xiaomi Redmi Note 8 Pro (begonia)
+            
+            Basado en:
+            - Kernel: postmarketOS mainline 6.16.4
+            - Userspace: Arch Linux ARM aarch64 (glibc)
+            
+            **Qué incluye:**
+            - `boot-begonia-arch.img` — flash con `fastboot flash boot`
+            - `rootfs-archlinuxarm-begonia-console.img.xz` — flash con `fastboot flash userdata`
+            - `flash-begonia-arch.sh` — script todo-en-uno
+            
+            **Instalación:**
+            ```
+            unxz rootfs-archlinuxarm-begonia-console.img.xz
+            fastboot flash boot boot-begonia-arch.img
+            fastboot flash userdata rootfs-archlinuxarm-begonia-console.img
+            fastboot reboot
+            ```
+            
+            Usuario: `alarm` / `alarm`
+            SSH: `ssh alarm@<ip>` (averigua IP desde el router o consola serial)
           prerelease: true
+          make_latest: true
           files: release/*
           fail_on_unmatched_files: false
