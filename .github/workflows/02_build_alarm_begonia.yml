@@ -163,22 +163,16 @@ jobs:
           ls -lh
           cd ..
 
-      - name: Delete old nightly release & tag
-        continue-on-error: true
-        run: |
-          gh release delete nightly -y --repo ${{ github.repository }} 2>/dev/null || true
-          git push --delete origin nightly 2>/dev/null || true
-          sleep 2
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Create/Update Release
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: nightly
+          tag: nightly
           name: "Arch Linux ARM for begonia (nightly)"
           body: |
             ## Arch Linux ARM for Xiaomi Redmi Note 8 Pro (begonia)
 
-            - **Kernel:** postmarketOS mainline 6.16.4 (initramfs embebido)
+            - **Kernel:** postmarketOS mainline 6.16.4
+            - **Initramfs:** nativo de Arch (mkinitcpio)
             - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
             - **Modules:** mt6785 mainline (6.16.4)
             - **Firmware:** WiFi, GPU, etc.
@@ -186,7 +180,7 @@ jobs:
             ### Files
             - `boot-begonia-arch.img` — Kernel + DTB + initramfs
             - `rootfs-archlinuxarm-begonia-console.img.xz` — Rootfs ext4
-            - `initramfs-arch.img` — initramfs nativo de Arch (mkinitcpio), opcional
+            - `initramfs-arch.img` — initramfs opcional
             - `flash-begonia-arch.sh` — Script de flasheo
 
             ### Install
@@ -200,6 +194,7 @@ jobs:
             **Login:** `alarm` / `alarm`
             **SSH:** `ssh alarm@<device-ip>`
           prerelease: true
-          make_latest: true
-          files: release/*
-          fail_on_unmatched_files: false
+          makeLatest: true
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: release/*
