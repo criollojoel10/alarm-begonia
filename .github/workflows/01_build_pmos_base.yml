@@ -3,9 +3,6 @@ name: "01 — Fetch pmOS base"
 on:
   workflow_dispatch:
     inputs:
-      artifact_url:
-        description: "Direct download URL (skip PAT)"
-        default: ""
       source_run:
         description: "Build # from begonia-postmarketos-build"
         default: "25"
@@ -25,97 +22,103 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            android-sdk-libsparse-utils \
+            android-sdk-libsparse-utils fdisk \
             --no-install-recommends
 
       - name: Download artifact
         run: |
-          if [ -n "${{ inputs.artifact_url }}" ]; then
-            echo "Downloading from provided URL..."
-            curl -sL -o pmos.zip "${{ inputs.artifact_url }}"
-          elif [ -n "${{ env.PAT }}" ]; then
-            echo "Auto-downloading from run #${{ inputs.source_run }}..."
-            echo "${{ env.PAT }}" | gh auth login --with-token 2>/dev/null || true
-            RUN_ID=$(gh run list --repo criollojoel10/begonia-postmarketos-build --limit 100 --json databaseId,number -q ".[] | select(.number == ${{ inputs.source_run }}) | .databaseId" | head -1)
-            [ -z "$RUN_ID" ] && RUN_ID="${{ inputs.source_run }}"
-            echo "Run database ID: $RUN_ID"
-            gh run download "$RUN_ID" \
-              --repo criollojoel10/begonia-postmarketos-build \
-              --name pmos-begonia-console-cross-true \
-              --dir pmos-raw 2>&1
-            cd pmos-raw && zip -r ../pmos.zip . && cd ..
-          else
-            echo "ERROR: no PMOS_PAT set. Create a PAT with actions:read scope."
-            exit 1
-          fi
+          echo "${{ env.PAT }}" | gh auth login --with-token 2>/dev/null || true
+          RUN_ID=$(gh run list --repo criollojoel10/begonia-postmarketos-build --limit 100 --json databaseId,number -q ".[] | select(.number == ${{ inputs.source_run }}) | .databaseId" | head -1)
+          [ -z "$RUN_ID" ] && RUN_ID="${{ inputs.source_run }}"
+          echo "Run ID: $RUN_ID"
+          gh run download "$RUN_ID" \
+            --repo criollojoel10/begonia-postmarketos-build \
+            --name pmos-begonia-console-cross-true \
+            --dir pmos-raw 2>&1
+          cd pmos-raw && zip -r pmos.zip . && cd ..
 
-      - name: Extract files
+      - name: Extract boot files
         run: |
           mkdir -p pmos out
           unzip -o pmos.zip -d pmos/
           EXDIR=$(find pmos -type d -name "export" | head -1)
           [ -z "$EXDIR" ] && EXDIR="pmos"
-          echo "Source: $EXDIR"
-          [ -f "$EXDIR/boot.img" ] && cp "$EXDIR/boot.img" out/boot.img && file out/boot.img
+
+          cp "$EXDIR/boot.img" out/boot.img
           [ -f "$EXDIR/vmlinuz" ] && cp "$EXDIR/vmlinuz" out/vmlinuz
           for f in "$EXDIR/initramfs" "$EXDIR/initramfs.gz" "$EXDIR/initrd.img"; do
             [ -f "$f" ] && cp "$f" out/initramfs && break
           done
-          echo "out/:"; ls -lh out/
+          echo "=== out/ ==="; ls -lh out/
 
       - name: Mount and extract modules + firmware
         run: |
-          # xiaomi-begonia.img is a FULL DISK IMAGE (partitioned)
           SYSIMG=$(find pmos -name "xiaomi-begonia.img" | head -1)
-          if [ -z "$SYSIMG" ]; then ls pmos/; exit 1; fi
           echo "System image: $(ls -lh $SYSIMG)"
 
           # Convert sparse -> raw
           file "$SYSIMG" | grep -q "sparse" && simg2img "$SYSIMG" system-raw.img || cp "$SYSIMG" system-raw.img
-          ls -lh system-raw.img
+          echo "Raw image: $(ls -lh system-raw.img)"
 
-          # Show partitions
-          fdisk -l system-raw.img 2>/dev/null || echo "No fdisk output"
+          # Get partition info from fdisk
+          fdisk -l system-raw.img > fdisk_out.txt 2>&1 || true
+          cat fdisk_out.txt
+          echo ""
 
-          # losetup -P creates partition devices
-          LOOP=$(sudo losetup -P -f --show -r system-raw.img)
-          echo "Loop: $LOOP"
-          ls -la ${LOOP}p* 2>/dev/null || echo "No partition nodes created"
-
-          FOUND=0
-          for part in ${LOOP}p*; do
-            [ -b "$part" ] || continue
-            echo "--- Mounting $part ---"
-            mkdir -p mnt
-            sudo mount -r "$part" mnt 2>/dev/null || { echo "mount failed"; continue; }
-            echo "mnt/: $(ls mnt/ 2>/dev/null | head -5)"
-
-            if [ -d mnt/lib/modules ]; then
-              KVER=$(ls mnt/lib/modules/ | head -1)
-              echo "FOUND modules: $KVER"
-              sudo tar -czf out/modules.tar.gz -C mnt/lib modules
-              ls -lh out/modules.tar.gz
-              FOUND=1
-            fi
-            if [ -d mnt/lib/firmware ]; then
-              echo "FOUND firmware"
-              sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
-              ls -lh out/firmware.tar.gz
-              FOUND=1
-            fi
-            sudo umount mnt
-          done
-
-          if [ "$FOUND" = "0" ]; then
-            echo "ERROR: No modules/firmware found!"
-            for part in ${LOOP}p*; do
-              [ -b "$part" ] || continue
-              mkdir -p m && sudo mount -r "$part" m 2>/dev/null && echo "--- $part ---" && ls m/ 2>/dev/null && sudo umount m || true
+          # Find partition offsets: look for "system-raw.imgN" lines
+          # Format: system-raw.img1  Start  End  Sectors  Size  Id  Type
+          PART_OFFSETS=$(awk '/^system-raw\.img[0-9]/{print $2","$4}' fdisk_out.txt 2>/dev/null)
+          
+          if [ -z "$PART_OFFSETS" ]; then
+            echo "No partitions found in fdisk, trying direct ext4 superblock scan..."
+            # Try mounting at various offsets
+            for OFF in 0 512 1024 2048 4096 65536 1048576 2097152; do
+              echo -n "Trying offset $OFF... "
+              mkdir -p mnt 2>/dev/null
+              if sudo mount -o loop,ro,offset=$OFF system-raw.img mnt 2>/dev/null; then
+                echo "MOUNTED!"
+                ls mnt/ 2>/dev/null | head -5
+                break
+              else
+                echo "failed"
+                sudo umount mnt 2>/dev/null || true
+              fi
             done
+          else
+            echo "Partition offsets: $PART_OFFSETS"
+            IFS=',' read -r START SECTORS <<< "$PART_OFFSETS"
+            OFFSET=$((START * 512))
+            echo "Mounting at offset=$OFFSET (sector $START)"
+            mkdir -p mnt
+            sudo mount -o loop,ro,offset=$OFFSET system-raw.img mnt
+            echo "Mounted! Contents:"
+            ls mnt/ 2>/dev/null | head -10
           fi
 
-          sudo losetup -d "$LOOP" 2>/dev/null || true
+          # Extract modules + firmware
+          if [ -d mnt/lib/modules ]; then
+            KVER=$(ls mnt/lib/modules/ | head -1)
+            echo "FOUND kernel modules: $KVER"
+            sudo tar -czf out/modules.tar.gz -C mnt/lib modules
+            ls -lh out/modules.tar.gz
+          fi
+          if [ -d mnt/lib/firmware ]; then
+            echo "FOUND firmware"
+            sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
+            ls -lh out/firmware.tar.gz
+          fi
+          sudo umount mnt 2>/dev/null || true
           echo "=== out/ ==="; ls -lh out/
+
+      - name: Verify content
+        run: |
+          echo "=== Final artifact contents ==="
+          ls -lh out/
+          echo ""
+          echo "boot.img SHA256: $(sha256sum out/boot.img | cut -d' ' -f1)"
+          [ -f out/modules.tar.gz ] && echo "modules.tar.gz: $(ls -lh out/modules.tar.gz | awk '{print $5}') ($(tar -tzf out/modules.tar.gz | wc -l) files)"
+          [ -f out/firmware.tar.gz ] && echo "firmware.tar.gz: $(ls -lh out/firmware.tar.gz | awk '{print $5}')"
+          [ -f out/initramfs ] && echo "initramfs: $(ls -lh out/initramfs | awk '{print $5}')"
 
       - name: Upload
         uses: actions/upload-artifact@v4
