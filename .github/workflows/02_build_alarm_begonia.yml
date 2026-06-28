@@ -84,44 +84,40 @@ jobs:
             echo "✅ $(find mnt/usr/lib/firmware -type f | wc -l) files"
           fi
 
-      - name: Configure rootfs
+      - name: Configure rootfs & install packages
         run: |
           sudo mkdir -p mnt/etc
           echo "nameserver 1.1.1.1" | sudo tee mnt/etc/resolv.conf
           echo "nameserver 8.8.8.8" | sudo tee -a mnt/etc/resolv.conf
 
-      - name: Install base packages + mkinitcpio
-        run: |
-          sudo systemd-nspawn -D mnt --pipe sh -c '
+          # Copy qemu-aarch64-static for chroot cross-arch
+          sudo cp "$(which qemu-aarch64-static)" mnt/usr/bin/
+
+          # Disable pacman sandbox (Landlock not available in runner)
+          sudo sed -i '/\[options\]/a DisableSandbox' mnt/etc/pacman.conf
+
+          # Chroot to install packages
+          sudo chroot mnt /bin/bash << 'CHROOT'
             pacman-key --init 2>&1 | tail -1
             pacman-key --populate archlinuxarm 2>&1 | tail -1
             pacman -Syu --noconfirm --needed \
               mkinitcpio busybox \
               sudo vim nano git openssh rsync curl wget \
               networkmanager systemd-resolved \
-              htop tmux 2>&1 | tail -5
-          ' 2>&1 || echo "⚠️ pacman had issues"
+              htop tmux 2>&1 | tail -10
+CHROOT
 
       - name: Generate Arch initramfs (mkinitcpio)
         run: |
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          if [ -z "$KVER" ]; then
-            echo "No kernel modules found, skipping mkinitcpio"
-            exit 0
-          fi
           echo "Kernel: $KVER"
-          
-          sudo systemd-nspawn -D mnt --pipe sh -c "
-            mkinitcpio -k '$KVER' -g /boot/initramfs-arch.img 2>&1
-          " 2>&1 | tail -20 || true
-          
-          if [ -f mnt/boot/initramfs-arch.img ]; then
-            echo "✅ Arch initramfs: $(ls -lh mnt/boot/initramfs-arch.img | awk '{print $5}')"
-          fi
+          sudo chroot mnt /bin/bash -c "mkinitcpio -k '$KVER' -g /boot/initramfs-arch.img 2>&1"
+          echo "---"
+          sudo ls -lh mnt/boot/initramfs-arch.img
 
       - name: Enable services & create user
         run: |
-          sudo systemd-nspawn -D mnt --pipe sh -c '
+          sudo chroot mnt /bin/bash << 'CHROOT'
             systemctl set-default multi-user.target
             systemctl enable sshd
             systemctl enable NetworkManager
@@ -130,34 +126,35 @@ jobs:
             useradd -m -s /bin/bash alarm 2>/dev/null || true
             echo "alarm:alarm" | chpasswd
             usermod -aG wheel alarm 2>/dev/null || true
-            sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers
+            sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
             echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
-          ' 2>&1 | tail -10 || true
+CHROOT
 
       - name: Prepare release
         run: |
           mkdir -p release
-          
-          # Use pmOS boot.img — its embedded initramfs auto-detects pmOS_ROOT label
-          # And will switch_root to Arch systemd
+
+          # Use pmOS boot.img as base
           cp pmos-base/boot.img release/boot-begonia-arch.img
           echo "boot.img: $(ls -lh release/boot-begonia-arch.img | awk '{print $5}')"
-          
-          # If mkinitcpio generated an Arch initramfs, also pack it separately
-          if [ -f mnt/boot/initramfs-arch.img ]; then
-            cp mnt/boot/initramfs-arch.img release/initramfs-arch.img
-            echo "Extra: initramfs-arch.img"
+
+          # Copy Arch initramfs (use sudo since owned by root)
+          if sudo test -f mnt/boot/initramfs-arch.img; then
+            sudo cp mnt/boot/initramfs-arch.img release/initramfs-arch.img
+            sudo chown $USER:$USER release/initramfs-arch.img
+            echo "initramfs-arch.img: $(ls -lh release/initramfs-arch.img | awk '{print $5}')"
           fi
-          
+
+          # Unmount and compress rootfs
           sudo umount mnt 2>/dev/null || true
           echo "Compressing rootfs.img with xz..."
           xz -9 -T 0 -f rootfs.img && ls -lh rootfs.img.xz
           mv rootfs.img.xz release/rootfs-archlinuxarm-begonia-console.img.xz
-          
+
           if [ -f flash/flash-begonia-arch.sh ]; then
             cp flash/flash-begonia-arch.sh release/
           fi
-          
+
           cd release
           sha256sum * > SHA256SUMS.txt
           ls -lh
@@ -185,7 +182,6 @@ jobs:
 
             ### Install
             ```
-            # Device must be in fastboot mode first
             fastboot format:ext4 userdata
             fastboot flash boot boot-begonia-arch.img
             fastboot flash userdata rootfs-archlinuxarm-begonia-console.img
