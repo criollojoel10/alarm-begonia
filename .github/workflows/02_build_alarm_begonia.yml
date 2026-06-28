@@ -12,7 +12,12 @@ permissions:
 
 env:
   ARCH_ROOTFS_URL: "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+  KERNEL_REPO: "https://gitlab.postmarketos.org/mt6785-mainline/linux.git"
+  KERNEL_TAG: "6.16.4-r0"
+  KERNEL_CONFIG_URL: "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/linux-postmarketos-mediatek-mt6785/config-postmarketos-mediatek-mt6785.aarch64"
+  RTL8192EU_REPO: "https://github.com/clnhub/rtl8192eu-linux.git"
   IMAGE_SIZE: "${{ inputs.rootfs_size }}G"
+  CACHE_KEY_KERNEL: "v1-kernel-6.16.4-r0"
 
 jobs:
   build:
@@ -28,6 +33,7 @@ jobs:
           sudo apt-get install -y -qq \
             libarchive-tools xz-utils zstd e2fsprogs \
             qemu-user-static binfmt-support \
+            gcc-aarch64-linux-gnu \
             --no-install-recommends
 
       - name: Download pmOS base
@@ -62,6 +68,81 @@ jobs:
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
           echo "Kernel: $KVER"
           echo "Modules: $(find mnt/usr/lib/modules -type f | wc -l)"
+          echo "KVER=$KVER" >> $GITHUB_ENV
+
+      # ============================================================
+      # Build RTL8192EU (TP-Link WN821N) WiFi driver for kernel 6.16.4
+      # ============================================================
+      - name: Restore kernel source cache
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: linux-kernel
+          key: ${{ env.CACHE_KEY_KERNEL }}
+          restore-keys: |
+            v1-kernel-
+
+      - name: Clone kernel source (shallow, tag ${{ env.KERNEL_TAG }})
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.KERNEL_TAG }} \
+            ${{ env.KERNEL_REPO }} linux-kernel 2>&1 | tail -3
+          du -sh linux-kernel
+
+      - name: Prepare kernel build tree (modules_prepare)
+        run: |
+          # Fetch pmOS kernel config
+          wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
+          cd linux-kernel
+          # Set config for external module build
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
+          # Prepare for external module compilation
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
+          # Verify Module.symvers exists (even if empty for now)
+          ls -lh Module.symvers 2>/dev/null || echo "no Module.symvers yet"
+
+      - name: Clone and build RTL8192EU driver
+        run: |
+          git clone --depth 1 ${{ env.RTL8192EU_REPO }} rtl8192eu-linux
+          cd rtl8192eu-linux
+          KSRC="${{ github.workspace }}/linux-kernel"
+          # Configure for ARM aarch64 cross-compilation
+          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
+          sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/' Makefile
+
+          # Build against kernel source
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            KSRC="$KSRC" -C "$KSRC" M="$PWD" modules 2>&1 | tail -10
+
+          # Verify the module was built
+          ls -lh 8192eu.ko 2>/dev/null || { echo "BUILD FAILED"; ls *.ko; false; }
+          modinfo 8192eu.ko | head -5
+
+      - name: Install WiFi driver to rootfs
+        run: |
+          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          MODDIR="mnt/usr/lib/modules/$KVER/extra"
+          sudo mkdir -p "$MODDIR"
+          sudo cp rtl8192eu-linux/8192eu.ko "$MODDIR/"
+          sudo depmod -b mnt "$KVER"
+
+          # Blacklist buggy rtl8xxxu driver + module options + load config
+          sudo mkdir -p mnt/etc/modprobe.d mnt/etc/modules-load.d
+          printf '%s\n' \
+            '# Blacklist the buggy in-kernel rtl8xxxu driver for RTL8192EU' \
+            '# The 8192eu driver from clnhub/rtl8192eu-linux is stable' \
+            'blacklist rtl8xxxu' \
+            '' \
+            '# Module options for WiFi stability' \
+            'options 8192eu rtw_power_mgnt=0 rtw_enusbss=0' \
+            | sudo tee mnt/etc/modprobe.d/rtl8192eu.conf > /dev/null
+          echo '8192eu' | sudo tee mnt/etc/modules-load.d/rtl8192eu.conf > /dev/null
+          echo "WiFi driver installed: $KVER"
+          find "$MODDIR" -name "*.ko" -exec ls -lh {} \;
+
+      # ============================================================
+      # End of WiFi driver build
+      # ============================================================
 
       - name: Prepare chroot environment
         run: |
@@ -71,24 +152,17 @@ jobs:
           sudo mount --bind /dev mnt/dev
           sudo mount --bind /dev/pts mnt/dev/pts 2>/dev/null || true
 
-          # FIX 1: Delete resolved symlink, copy host resolv.conf as regular file
-          echo "=== Debug: resolv.conf before fix ==="
-          sudo ls -la mnt/etc/resolv.conf 2>/dev/null || echo "no resolv.conf"
+          # Fix DNS: delete resolved symlink, copy host resolv.conf
           sudo rm -f mnt/etc/resolv.conf
           sudo bash -c 'cp /etc/resolv.conf mnt/etc/resolv.conf'
-          echo "=== Debug: resolv.conf after fix ==="
           sudo ls -la mnt/etc/resolv.conf
-          sudo cat mnt/etc/resolv.conf
 
-          # FIX 2: Provide kernel image for mkinitcpio
+          # Provide kernel image for mkinitcpio
           sudo mkdir -p mnt/boot
           sudo cp pmos-base/vmlinuz mnt/boot/vmlinuz-linux
 
           # Disable pacman sandbox
           sudo sed -i '/\[options\]/a DisableSandbox' mnt/etc/pacman.conf
-
-          # Verify DNS works from inside chroot
-          sudo chroot mnt /bin/bash -c 'ping -c 1 -W 5 mirror.archlinuxarm.org && echo "DNS OK!" || echo "DNS FAIL"'
 
       - name: Install packages (pacman inside chroot)
         run: |
@@ -113,7 +187,6 @@ jobs:
             systemctl set-default multi-user.target; \
             systemctl enable sshd; \
             systemctl enable NetworkManager; \
-            systemctl enable systemd-resolved; \
             systemctl enable systemd-timesyncd; \
             useradd -m -s /bin/bash alarm 2>/dev/null || true; \
             echo "alarm:alarm" | chpasswd; \
@@ -153,6 +226,8 @@ jobs:
             - **Kernel:** postmarketOS mainline 6.16.4
             - **Initramfs:** nativo de Arch (mkinitcpio)
             - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
+            - **WiFi:** Driver RTL8192EU incluido (TP-Link WN821N)
+              - rtl8xxxu blacklisted, 8192eu con power saving desactivado
 
             ### Install
             ```
