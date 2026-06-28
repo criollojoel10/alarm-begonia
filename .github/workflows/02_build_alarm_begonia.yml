@@ -26,11 +26,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            libarchive-tools cpio xz-utils zstd e2fsprogs \
-            qemu-user-static binfmt-support systemd-container \
+            libarchive-tools xz-utils zstd e2fsprogs \
+            qemu-user-static binfmt-support \
             --no-install-recommends
 
-      - name: Download pmOS base (from 01)
+      - name: Download pmOS base
         uses: dawidd6/action-download-artifact@v9
         with:
           name: pmos-base-begonia
@@ -40,13 +40,6 @@ jobs:
           workflow_search: true
           check_artifacts: true
           repo: criollojoel10/alarm-begonia
-
-      - name: Verify pmOS base
-        run: |
-          ls -lh pmos-base/
-          file pmos-base/boot.img
-          [ -f pmos-base/modules.tar.gz ] && echo "modules ok"
-          [ -f pmos-base/firmware.tar.gz ] && echo "firmware ok"
 
       - name: Download Arch rootfs
         run: |
@@ -59,32 +52,40 @@ jobs:
           mkfs.ext4 -F -L pmOS_ROOT rootfs.img
           mkdir -p mnt
           sudo mount rootfs.img mnt
-          df -h mnt
 
-      - name: Extract Arch rootfs
+      - name: Extract Arch rootfs + inject modules/firmware
         run: |
           sudo bsdtar -xpf arch-rootfs.tar.gz -C mnt
-          sudo sync
-
-      - name: Inject kernel modules
-        run: |
           sudo mkdir -p mnt/usr/lib
           sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/
-          KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          echo "$KVER ($(find mnt/usr/lib/modules -type f | wc -l) files)"
-
-      - name: Inject firmware
-        run: |
           sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/ 2>/dev/null || true
-          echo "$(find mnt/usr/lib/firmware -type f 2>/dev/null | wc -l) firmware files"
+          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          echo "Kernel: $KVER"
+          echo "Modules: $(find mnt/usr/lib/modules -type f | wc -l)"
+          echo "Firmware: $(find mnt/usr/lib/firmware -type f 2>/dev/null | wc -l)"
 
-      - name: Configure rootfs & install packages
+      - name: Prepare chroot environment
         run: |
-          sudo mkdir -p mnt/etc
-          echo "nameserver 1.1.1.1" | sudo tee mnt/etc/resolv.conf
-          echo "nameserver 8.8.8.8" | sudo tee -a mnt/etc/resolv.conf
+          # Copy qemu for cross-arch chroot
           sudo cp "$(which qemu-aarch64-static)" mnt/usr/bin/
+
+          # Mount proc, sys, dev for chroot
+          sudo mount -t proc proc mnt/proc
+          sudo mount --bind /sys mnt/sys
+          sudo mount --bind /dev mnt/dev
+          sudo mount --bind /dev/pts mnt/dev/pts 2>/dev/null || true
+
+          # Fix resolv.conf - copy host DNS (works with QEMU)
+          sudo cp /etc/resolv.conf mnt/etc/resolv.conf
+
+          # Disable pacman sandbox (Landlock not available in runner)
           sudo sed -i '/\[options\]/a DisableSandbox' mnt/etc/pacman.conf
+
+          # Verify DNS works from inside chroot
+          sudo chroot mnt /bin/bash -c 'getent hosts mirror.archlinuxarm.org || ping -c 1 -W 3 mirror.archlinuxarm.org || echo "DNS check done"'
+
+      - name: Install packages (pacman inside chroot)
+        run: |
           sudo chroot mnt /bin/bash -c '\
             pacman-key --init 2>&1 | tail -1; \
             pacman-key --populate archlinuxarm 2>&1 | tail -1; \
@@ -92,12 +93,11 @@ jobs:
               mkinitcpio busybox \
               sudo vim nano git openssh rsync curl wget \
               networkmanager systemd-resolved \
-              htop tmux 2>&1 | tail -10'
+              htop tmux 2>&1 | tail -15'
 
       - name: Generate Arch initramfs
         run: |
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          echo "Kernel: $KVER"
           sudo chroot mnt /bin/bash -c "mkinitcpio -k '$KVER' -g /boot/initramfs-arch.img 2>&1"
           sudo ls -lh mnt/boot/initramfs-arch.img
 
@@ -115,25 +115,28 @@ jobs:
             sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers; \
             echo "PermitRootLogin yes" >> /etc/ssh/sshd_config'
 
+      - name: Cleanup chroot mounts
+        run: |
+          sudo umount mnt/dev/pts 2>/dev/null || true
+          sudo umount mnt/dev 2>/dev/null || true
+          sudo umount mnt/sys 2>/dev/null || true
+          sudo umount mnt/proc 2>/dev/null || true
+
       - name: Prepare release
         run: |
           mkdir -p release
           cp pmos-base/boot.img release/boot-begonia-arch.img
-          echo "boot.img ready"
+
           if sudo test -f mnt/boot/initramfs-arch.img; then
             sudo cp mnt/boot/initramfs-arch.img release/
             sudo chown "$USER:$USER" release/initramfs-arch.img
-            echo "initramfs-arch.img ready"
           fi
+
           sudo umount mnt 2>/dev/null || true
-          echo "Compressing rootfs..."
           xz -9 -T 0 -f rootfs.img
           mv rootfs.img.xz release/rootfs-archlinuxarm-begonia-console.img.xz
           [ -f flash/flash-begonia-arch.sh ] && cp flash/flash-begonia-arch.sh release/
-          cd release
-          sha256sum * > SHA256SUMS.txt
-          ls -lh
-          cd ..
+          cd release && sha256sum * > SHA256SUMS.txt && ls -lh && cd ..
 
       - name: Create/Update Release
         uses: ncipollo/release-action@v1
@@ -146,8 +149,6 @@ jobs:
             - **Kernel:** postmarketOS mainline 6.16.4
             - **Initramfs:** nativo de Arch (mkinitcpio)
             - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
-            - **Modules:** mt6785 mainline (6.16.4)
-            - **Firmware:** included
 
             ### Install
             ```
@@ -158,7 +159,6 @@ jobs:
             ```
 
             **Login:** `alarm` / `alarm`
-            **SSH:** `ssh alarm@<device-ip>`
           prerelease: true
           makeLatest: true
           allowUpdates: true
