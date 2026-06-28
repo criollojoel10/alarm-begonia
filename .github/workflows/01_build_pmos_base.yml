@@ -35,7 +35,7 @@ jobs:
             --repo criollojoel10/begonia-postmarketos-build \
             --name pmos-begonia-console-cross-true \
             --dir pmos-raw 2>&1
-          cd pmos-raw && zip -r pmos.zip . && cd ..
+          cd pmos-raw && zip -r ../pmos.zip . && cd ..
 
       - name: Extract boot files
         run: |
