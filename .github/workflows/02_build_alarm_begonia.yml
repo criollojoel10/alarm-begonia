@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y -qq \
             libarchive-tools xz-utils zstd e2fsprogs \
             qemu-user-static binfmt-support \
-            gcc-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu python3 \
             --no-install-recommends
 
       - name: Download pmOS base
@@ -52,10 +52,20 @@ jobs:
           wget -q --show-progress "${{ env.ARCH_ROOTFS_URL }}" -O arch-rootfs.tar.gz
           ls -lh arch-rootfs.tar.gz
 
+      # ============================================================
+      # FIX #1: Fix boot.img cmdline — remove hardcoded pmos_root_uuid
+      # The original pmOS boot.img has pmos_root_uuid= from the build #25 rootfs.
+      # Our Arch rootfs has a different UUID, so blkid --uuid fails,
+      # and find_partition() RETURNS EMPTY without falling through to label check.
+      # ============================================================
+      - name: Fix boot.img cmdline (remove hardcoded UUIDs)
+        run: python3 scripts/fix-cmdline.py
+
       - name: Create and mount rootfs image
         run: |
           truncate -s ${{ env.IMAGE_SIZE }} rootfs.img
-          mkfs.ext4 -F -L pmOS_ROOT rootfs.img
+          # FIX #2: Use lowercase "pmOS_root" to match initramfs blkid --label search
+          mkfs.ext4 -F -L pmOS_root rootfs.img
           mkdir -p mnt
           sudo mount rootfs.img mnt
 
@@ -91,14 +101,10 @@ jobs:
 
       - name: Prepare kernel build tree (modules_prepare)
         run: |
-          # Fetch pmOS kernel config
           wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
           cd linux-kernel
-          # Set config for external module build
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
-          # Prepare for external module compilation
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
-          # Verify Module.symvers exists (even if empty for now)
           ls -lh Module.symvers 2>/dev/null || echo "no Module.symvers yet"
 
       - name: Clone and build RTL8192EU driver
@@ -106,17 +112,10 @@ jobs:
           git clone --depth 1 ${{ env.RTL8192EU_REPO }} rtl8192eu-linux
           cd rtl8192eu-linux
           KSRC="${{ github.workspace }}/linux-kernel"
-          # Configure for ARM aarch64 cross-compilation
           sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
           sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/' Makefile
-
-          # Build using the driver's OWN Makefile.
-          # KBUILD_MODPOST_WARN=1: Module.symvers is empty (only modules_prepared, not full kernel build),
-          # so modpost would error on every external symbol. These are standard exports resolved at load time.
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             KSRC="$KSRC" KBUILD_MODPOST_WARN=1 2>&1 | tail -30
-
-          # Verify the module was built
           ls -lh 8192eu.ko 2>/dev/null || { echo "BUILD FAILED"; ls *.ko; false; }
           modinfo 8192eu.ko | head -5
 
@@ -128,7 +127,6 @@ jobs:
           sudo cp rtl8192eu-linux/8192eu.ko "$MODDIR/"
           sudo depmod -b mnt "$KVER"
 
-          # Blacklist buggy rtl8xxxu driver + module options + load config
           sudo mkdir -p mnt/etc/modprobe.d mnt/etc/modules-load.d
           printf '%s\n' \
             '# Blacklist the buggy in-kernel rtl8xxxu driver for RTL8192EU' \
@@ -154,16 +152,13 @@ jobs:
           sudo mount --bind /dev mnt/dev
           sudo mount --bind /dev/pts mnt/dev/pts 2>/dev/null || true
 
-          # Fix DNS: delete resolved symlink, copy host resolv.conf
           sudo rm -f mnt/etc/resolv.conf
           sudo bash -c 'cp /etc/resolv.conf mnt/etc/resolv.conf'
           sudo ls -la mnt/etc/resolv.conf
 
-          # Provide kernel image for mkinitcpio
           sudo mkdir -p mnt/boot
           sudo cp pmos-base/vmlinuz mnt/boot/vmlinuz-linux
 
-          # Disable pacman sandbox
           sudo sed -i '/\[options\]/a DisableSandbox' mnt/etc/pacman.conf
 
       - name: Install packages (pacman inside chroot)
@@ -230,9 +225,14 @@ jobs:
             - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
             - **WiFi:** Driver RTL8192EU incluido (TP-Link WN821N)
               - rtl8xxxu blacklisted, 8192eu con power saving desactivado
+            - **FIX:** kernel cmdline ya no tiene UUID hardcodeado — initramfs detecta root por label `pmOS_root`
 
             ### Install
             ```
+            # Descargar y descomprimir:
+            xz -d rootfs-archlinuxarm-begonia-console.img.xz
+
+            # Flashear:
             fastboot format:ext4 userdata
             fastboot flash boot boot-begonia-arch.img
             fastboot flash userdata rootfs-archlinuxarm-begonia-console.img
