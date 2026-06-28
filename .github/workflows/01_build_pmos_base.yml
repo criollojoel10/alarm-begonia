@@ -23,7 +23,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             android-sdk-libsparse-utils \
-            gdisk \
             --no-install-recommends
 
       - name: Download artifact
@@ -52,7 +51,7 @@ jobs:
           done
           echo "=== out/ ==="; ls -lh out/
 
-      - name: Mount and extract modules + firmware
+      - name: Scan and extract filesystems
         run: |
           SYSIMG=$(find pmos -name "xiaomi-begonia.img" | head -1)
           echo "System image: $(ls -lh $SYSIMG)"
@@ -61,56 +60,8 @@ jobs:
           file "$SYSIMG" | grep -q "sparse" && simg2img "$SYSIMG" system-raw.img || cp "$SYSIMG" system-raw.img
           echo "Raw image: $(ls -lh system-raw.img)"
 
-          # Method: Use sgdisk to get partition start sectors, then mount with offset
-          echo "=== GPT Partition Table ==="
-          sgdisk -p system-raw.img 2>&1 || true
-          echo ""
-
-          # Get partition start LBAs (sectors) from sgdisk
-          # Format: Number  Start (sector)  End (sector)  Size  Code  Name
-          # sgdisk -p doesn't parse well, use sgdisk -i instead or just awk
-          # Extract partitions that are not empty
-          
-          # sgdisk --pretend --print gives stable format
-          # We'll use a smarter approach: iterate partition numbers
-          for PART_NUM in 1 2 3 4 5 6; do
-            START=$(sgdisk -i $PART_NUM system-raw.img 2>/dev/null | grep "Partition start sector" | awk '{print $4}')
-            [ -z "$START" ] && continue
-            PART_NAME=$(sgdisk -i $PART_NUM system-raw.img 2>/dev/null | grep "Partition name" | cut -d"'" -f2)
-            OFFSET=$((START * 512))
-            echo ""
-            echo "Partition $PART_NUM: '$PART_NAME' start_sector=$START offset=$OFFSET"
-            
-            mkdir -p mnt
-            if sudo mount -o loop,ro,offset=$OFFSET system-raw.img mnt; then
-              echo "Mounted! Contents: $(ls mnt/ 2>/dev/null | head -5)"
-              
-              if [ -d mnt/lib/modules ]; then
-                KVER=$(ls mnt/lib/modules/ | head -1)
-                echo "✅ FOUND kernel modules: $KVER"
-                sudo tar -czf out/modules.tar.gz -C mnt/lib modules
-                echo "   modules.tar.gz: $(ls -lh out/modules.tar.gz | awk '{print $5}') ($(tar -tzf out/modules.tar.gz | wc -l) files)"
-              fi
-              if [ -d mnt/lib/firmware ]; then
-                echo "✅ FOUND firmware"
-                sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
-                echo "   firmware.tar.gz: $(ls -lh out/firmware.tar.gz | awk '{print $5}')"
-              fi
-              
-              # Also grab the kernel version string for verification
-              if [ -f mnt/usr/lib/os-release ]; then
-                echo "OS: $(grep ^PRETTY_NAME mnt/usr/lib/os-release 2>/dev/null)"
-              fi
-              
-              sudo umount mnt
-            else
-              echo "   Mount failed (expected if wrong fs type)"
-            fi
-          done
-
-          echo ""
-          echo "=== Final output ==="
-          ls -lh out/
+          # Scan for ext4 partitions and extract modules/firmware
+          python3 scripts/scan-extract-fs.py system-raw.img out
 
       - name: Verify content
         run: |
