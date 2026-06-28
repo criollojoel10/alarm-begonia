@@ -22,6 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libarchive-tools cpio xz-utils zstd e2fsprogs \
+            qemu-user-static binfmt-support \
+            --no-install-recommends
+
       - name: Download pmOS base (from 01)
         uses: dawidd6/action-download-artifact@v9
         with:
@@ -37,26 +45,18 @@ jobs:
         run: |
           ls -lh pmos-base/
           file pmos-base/boot.img
-          [ -f pmos-base/modules.tar.gz ] && echo "✅ modules.tar.gz"
-          [ -f pmos-base/firmware.tar.gz ] && echo "✅ firmware.tar.gz"
-
-      - name: Install deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            libarchive-tools cpio xz-utils zstd e2fsprogs \
-            qemu-user-static binfmt-support \
-            --no-install-recommends
+          [ -f pmos-base/modules.tar.gz ] && echo "✅ modules"
+          [ -f pmos-base/firmware.tar.gz ] && echo "✅ firmware"
 
       - name: Download Arch rootfs
         run: |
           wget -q --show-progress "${{ env.ARCH_ROOTFS_URL }}" -O arch-rootfs.tar.gz
           ls -lh arch-rootfs.tar.gz
 
-      - name: Create and mount rootfs image
+      - name: Create and mount rootfs image (labeled pmOS_ROOT for initramfs compat)
         run: |
           truncate -s ${{ env.IMAGE_SIZE }} rootfs.img
-          mkfs.ext4 -F -L ArchRoot rootfs.img
+          mkfs.ext4 -F -L pmOS_ROOT rootfs.img
           mkdir -p mnt
           sudo mount rootfs.img mnt
           df -h mnt
@@ -65,18 +65,15 @@ jobs:
         run: |
           sudo bsdtar -xpf arch-rootfs.tar.gz -C mnt
           sudo sync
-          echo "Rootfs extracted. Used: $(df -h mnt | tail -1 | awk '{print $3}')"
+          echo "Used: $(df -h mnt | tail -1 | awk '{print $3}')"
 
       - name: Inject kernel modules
         run: |
           if [ -f pmos-base/modules.tar.gz ]; then
             sudo mkdir -p mnt/usr/lib
             sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/
-            KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)
-            MOD_COUNT=$(find mnt/usr/lib/modules -type f 2>/dev/null | wc -l)
-            echo "✅ Modules injected: $KVER ($MOD_COUNT files)"
-          else
-            echo "❌ No modules.tar.gz"
+            KVER=$(ls mnt/usr/lib/modules/ | head -1)
+            echo "✅ $KVER ($(find mnt/usr/lib/modules -type f | wc -l) files)"
           fi
 
       - name: Inject firmware
@@ -84,10 +81,7 @@ jobs:
           if [ -f pmos-base/firmware.tar.gz ]; then
             sudo mkdir -p mnt/usr/lib
             sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/
-            FW_COUNT=$(find mnt/usr/lib/firmware -type f 2>/dev/null | wc -l)
-            echo "✅ Firmware injected: $FW_COUNT files"
-          else
-            echo "✅ No firmware.tar.gz (ok, pmOS firmware already in boot.img dtb)"
+            echo "✅ $(find mnt/usr/lib/firmware -type f | wc -l) files"
           fi
 
       - name: Configure rootfs
@@ -96,19 +90,34 @@ jobs:
           echo "nameserver 1.1.1.1" | sudo tee mnt/etc/resolv.conf
           echo "nameserver 8.8.8.8" | sudo tee -a mnt/etc/resolv.conf
 
-          sudo systemd-nspawn -D mnt --pipe sh -c '
-            pacman-key --init && pacman-key --populate archlinuxarm
-          ' 2>&1 | tail -5 || true
-
-      - name: Install packages
+      - name: Install base packages + mkinitcpio
         run: |
           sudo systemd-nspawn -D mnt --pipe sh -c '
+            pacman-key --init 2>&1 | tail -1
+            pacman-key --populate archlinuxarm 2>&1 | tail -1
             pacman -Syu --noconfirm --needed \
+              mkinitcpio busybox \
               sudo vim nano git openssh rsync curl wget \
               networkmanager systemd-resolved \
-              htop tmux \
-              2>&1
-          ' 2>&1 | tail -20 || echo "⚠️ pacman install had issues (likely network in chroot)"
+              htop tmux 2>&1 | tail -5
+          ' 2>&1 || echo "⚠️ pacman had issues"
+
+      - name: Generate Arch initramfs (mkinitcpio)
+        run: |
+          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          if [ -z "$KVER" ]; then
+            echo "No kernel modules found, skipping mkinitcpio"
+            exit 0
+          fi
+          echo "Kernel: $KVER"
+          
+          sudo systemd-nspawn -D mnt --pipe sh -c "
+            mkinitcpio -k '$KVER' -g /boot/initramfs-arch.img 2>&1
+          " 2>&1 | tail -20 || true
+          
+          if [ -f mnt/boot/initramfs-arch.img ]; then
+            echo "✅ Arch initramfs: $(ls -lh mnt/boot/initramfs-arch.img | awk '{print $5}')"
+          fi
 
       - name: Enable services & create user
         run: |
@@ -129,17 +138,22 @@ jobs:
         run: |
           mkdir -p release
           
-          # Use pmOS boot.img directly (it has working initramfs already)
+          # Use pmOS boot.img — its embedded initramfs auto-detects pmOS_ROOT label
+          # And will switch_root to Arch systemd
           cp pmos-base/boot.img release/boot-begonia-arch.img
           echo "boot.img: $(ls -lh release/boot-begonia-arch.img | awk '{print $5}')"
           
-          # Compress rootfs
+          # If mkinitcpio generated an Arch initramfs, also pack it separately
+          if [ -f mnt/boot/initramfs-arch.img ]; then
+            cp mnt/boot/initramfs-arch.img release/initramfs-arch.img
+            echo "Extra: initramfs-arch.img"
+          fi
+          
           sudo umount mnt 2>/dev/null || true
           echo "Compressing rootfs.img with xz..."
           xz -9 -T 0 -f rootfs.img && ls -lh rootfs.img.xz
           mv rootfs.img.xz release/rootfs-archlinuxarm-begonia-console.img.xz
           
-          # Flash script
           if [ -f flash/flash-begonia-arch.sh ]; then
             cp flash/flash-begonia-arch.sh release/
           fi
@@ -164,14 +178,16 @@ jobs:
           body: |
             ## Arch Linux ARM for Xiaomi Redmi Note 8 Pro (begonia)
 
-            - **Kernel:** postmarketOS mainline 6.16.4
-            - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman)
-            - **Modules:** mt6785 mainline
-            - **Firmware:** included (WiFi, GPU, etc.)
+            - **Kernel:** postmarketOS mainline 6.16.4 (initramfs embebido)
+            - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
+            - **Modules:** mt6785 mainline (6.16.4)
+            - **Firmware:** WiFi, GPU, etc.
 
             ### Files
             - `boot-begonia-arch.img` — Kernel + DTB + initramfs
-            - `rootfs-archlinuxarm-begonia-console.img.xz` — Rootfs (ext4)
+            - `rootfs-archlinuxarm-begonia-console.img.xz` — Rootfs ext4
+            - `initramfs-arch.img` — initramfs nativo de Arch (mkinitcpio), opcional
+            - `flash-begonia-arch.sh` — Script de flasheo
 
             ### Install
             ```
