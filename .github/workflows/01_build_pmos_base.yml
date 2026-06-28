@@ -1,0 +1,197 @@
+#!/bin/bash
+# =============================================================================
+# build-pmos-base.yml — Extraer boot.img, módulos y firmware de pmOS
+# =============================================================================
+# Fase 0 del plan: congelar base postmarketOS funcional para begonia
+# Produce:
+#   - boot.img (kernel mainline 6.x + DTB + initramfs)
+#   - modules.tar.zst (/lib/modules/*)
+#   - firmware.tar.zst (/lib/firmware/* mediatek)
+#   - deviceinfo
+#   - cmdline efectivo
+# =============================================================================
+name: "🏗️ 01 — Build pmOS base (begonia)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: "UI (console, phosh)"
+        default: "console"
+        type: choice
+        options: [console, phosh]
+      pmaports_branch:
+        description: "pmaports branch"
+        default: "main"
+        type: choice
+        options: [main, master]
+      extra_space:
+        description: "Extra space MB"
+        default: "2048"
+
+env:
+  DEVICE: "xiaomi-begonia"
+  KERNEL_PKG: "linux-postmarketos-mediatek-mt6785"
+  PMB_WORK: /home/runner/.local/var/pmbootstrap
+  PMB_CONFIG: /home/runner/.config/pmbootstrap_v3.cfg
+  PMAPORTS_DIR: /home/runner/work/alarm-begonia/alarm-begonia/pmaports
+
+jobs:
+  build_pmos:
+    name: "Build pmOS base"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "💾 Free disk"
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
+
+      - name: "📦 Install dependencies"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            git python3 python3-pip python3-venv python3-setuptools python3-wheel \
+            bison flex bc cpio zip unzip xz-utils zstd kmod file rsync \
+            android-sdk-platform-tools qemu-user-static binfmt-support \
+            ca-certificates openssl kpartx util-linux parted e2fsprogs \
+            dosfstools findutils coreutils \
+            --no-install-recommends
+
+      - name: "📥 Clone pmbootstrap"
+        run: |
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          mkdir -p $HOME/.local/bin
+          ln -sf $PWD/pmbootstrap/pmbootstrap.py $HOME/.local/bin/pmbootstrap
+          echo $HOME/.local/bin >> $GITHUB_PATH
+
+      - name: "📥 Clone pmaports"
+        run: |
+          BRANCH="${{ inputs.pmaports_branch }}"
+          if git clone --depth=1 --branch=$BRANCH \
+            https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR; then
+            echo "Cloned branch: $BRANCH"
+          else
+            rm -rf $PMAPORTS_DIR
+            git clone --depth=1 --branch=master \
+              https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR
+          fi
+          git -C $PMAPORTS_DIR log -1 --oneline
+          git -C $PMAPORTS_DIR update-ref refs/remotes/origin/main HEAD
+
+      - name: "🔧 Configure pmbootstrap"
+        run: |
+          rm -rf $PMB_WORK
+          mkdir -p $HOME/.config
+          printf '[pmbootstrap]\naports = %s\nwork = %s\ndevice = %s\nui = %s\nuser = joel\nextra_space = %s\nssh_keys = False\nsudo_timer = False\n' \
+            "$PMAPORTS_DIR" "$PMB_WORK" "${{ env.DEVICE }}" "${{ inputs.ui }}" "${{ inputs.extra_space }}" > "$PMB_CONFIG"
+          mkdir -p $PMB_WORK/cache_git
+          echo "8" > $PMB_WORK/version
+          ln -sfn $PMAPORTS_DIR $PMB_WORK/cache_git/pmaports
+
+      - name: "🔌 Enable USB Ethernet & WiFi dongle drivers"
+        run: |
+          KCONFIG="${PMAPORTS_DIR}/device/testing/${KERNEL_PKG}/config-postmarketos-mediatek-mt6785.aarch64"
+          cat >> "$KCONFIG" << 'KCEOF'
+# USB Ethernet dongles
+CONFIG_USB_USBNET=y
+CONFIG_USB_NET_AX8817X=m
+CONFIG_USB_NET_AX88179_178A=m
+CONFIG_USB_RTL8150=m
+CONFIG_USB_RTL8152=m
+CONFIG_USB_NET_CDCETHER=m
+CONFIG_USB_NET_CDC_EEM=m
+CONFIG_USB_NET_CDC_NCM=m
+CONFIG_USB_NET_DM9601=m
+CONFIG_USB_NET_SMSC95XX=m
+CONFIG_USB_NET_SR9700=m
+CONFIG_USB_NET_SR9800=m
+# Realtek WiFi dongles
+CONFIG_WLAN_VENDOR_REALTEK=y
+CONFIG_RTL8XXXU=m
+# MediaTek WiFi
+CONFIG_WLAN_VENDOR_MEDIATEK=y
+CONFIG_MT76=m
+CONFIG_MT76_USB=m
+CONFIG_MT76X0U=m
+CONFIG_MT76X2U=m
+CONFIG_MT7921U=m
+# USB-to-Serial
+CONFIG_USB_SERIAL_PL2303=m
+CONFIG_USB_SERIAL_FTDI_SIO=m
+CONFIG_USB_SERIAL_CP210X=m
+KCEOF
+
+      - name: "🛠️ Rebuild kernel with new drivers"
+        run: |
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 \
+            --details-to-stdout checksum "${{ env.KERNEL_PKG }}"
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 -j 1 \
+            --details-to-stdout build "${{ env.KERNEL_PKG }}" --force
+
+      - name: "💿 Build system image"
+        run: |
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -E "${{ inputs.extra_space }}" \
+            -t 3600 -j 1 --details-to-stdout install
+
+      - name: "📤 Export images"
+        run: |
+          mkdir -p artifacts
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 export || true
+          cp -av /tmp/postmarketOS-export/* artifacts/ 2>/dev/null || true
+
+      - name: "📦 Extract modules"
+        run: |
+          mkdir -p artifacts/modules
+          ROOTFS=$(find $PMB_WORK/chroot_native/home/pmos/rootfs -name "*.img" 2>/dev/null | head -1)
+          if [ -n "$ROOTFS" ]; then
+            mkdir -p /mnt/rootfs
+            sudo mount -o loop,ro,offset=0 "$ROOTFS" /mnt/rootfs 2>/dev/null || \
+            sudo mount -o loop,ro "$ROOTFS" /mnt/rootfs 2>/dev/null || true
+            if mountpoint -q /mnt/rootfs; then
+              cd /mnt/rootfs/lib/modules
+              KVER=$(ls -d */ 2>/dev/null | head -1 | tr -d '/')
+              if [ -n "$KVER" ]; then
+                tar -czf $OLDPWD/artifacts/modules/modules-${KVER}.tar.gz .
+                sudo cp -a "$KVER" $OLDPWD/artifacts/modules/
+              fi
+              cd $OLDPWD
+              sudo cp -a /mnt/rootfs/lib/firmware artifacts/firmware 2>/dev/null || true
+              sudo umount /mnt/rootfs
+            fi
+          fi
+
+      - name: "🔍 Inspect boot.img"
+        run: |
+          if [ -f artifacts/boot.img ]; then
+            file artifacts/boot.img
+            mkdir -p artifacts/boot-contents
+            cd artifacts/boot-contents
+            # Extract boot.img for inspection
+            pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" bootimg_analyze artifacts/boot.img 2>&1 | tee ../bootimg-analysis.txt
+          fi
+
+      - name: "📝 Save device info and cmdline"
+        run: |
+          if [ -f artifacts/boot.img ]; then
+            # Extract cmdline from boot.img
+            strings artifacts/boot.img | grep '^console=' | head -3 > artifacts/boot-cmdline.txt 2>/dev/null || true
+          fi
+
+      - name: "📦 Consolidate and upload"
+        run: |
+          mkdir -p artifacts/images
+          mv artifacts/boot.img artifacts/images/ 2>/dev/null || true
+          ls -lh artifacts/images/
+          ls -lh artifacts/modules/ 2>/dev/null || true
+
+      - name: "☁️ Upload artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmos-base-begonia-${{ inputs.ui }}
+          path: artifacts/
+          retention-days: 30
