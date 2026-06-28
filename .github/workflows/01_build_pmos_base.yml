@@ -26,7 +26,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             android-sdk-libsparse-utils \
-            e2fsprogs f2fs-tools \
             --no-install-recommends
 
       - name: Download artifact
@@ -37,13 +36,8 @@ jobs:
           elif [ -n "${{ env.PAT }}" ]; then
             echo "Auto-downloading from run #${{ inputs.source_run }}..."
             echo "${{ env.PAT }}" | gh auth login --with-token 2>/dev/null || true
-            # Resolve run number to database ID
-            echo "Resolving run number ${{ inputs.source_run }}..."
             RUN_ID=$(gh run list --repo criollojoel10/begonia-postmarketos-build --limit 100 --json databaseId,number -q ".[] | select(.number == ${{ inputs.source_run }}) | .databaseId" | head -1)
-            if [ -z "$RUN_ID" ]; then
-              echo "Could not resolve run #${{ inputs.source_run }}, trying as database ID..."
-              RUN_ID="${{ inputs.source_run }}"
-            fi
+            [ -z "$RUN_ID" ] && RUN_ID="${{ inputs.source_run }}"
             echo "Run database ID: $RUN_ID"
             gh run download "$RUN_ID" \
               --repo criollojoel10/begonia-postmarketos-build \
@@ -51,17 +45,9 @@ jobs:
               --dir pmos-raw 2>&1
             cd pmos-raw && zip -r ../pmos.zip . && cd ..
           else
-            echo "ERROR: provide artifact_url input or set PMOS_PAT secret"
-            echo ""
-            echo "How to get the artifact URL:"
-            echo "1. Go to https://github.com/criollojoel10/begonia-postmarketos-build/actions/runs/28313265908"
-            echo "2. Download 'pmos-begonia-console-cross-true' manually"
-            echo "3. Upload to any public file host and pass URL, OR"
-            echo "4. Create a PAT with 'repo' scope, save as repo secret PMOS_PAT"
+            echo "ERROR: no PMOS_PAT set. Create a PAT with actions:read scope."
             exit 1
           fi
-          ls -lh pmos.zip
-          unzip -l pmos.zip | head -15
 
       - name: Extract files
         run: |
@@ -70,71 +56,66 @@ jobs:
           EXDIR=$(find pmos -type d -name "export" | head -1)
           [ -z "$EXDIR" ] && EXDIR="pmos"
           echo "Source: $EXDIR"
-          if [ -f "$EXDIR/boot.img" ]; then
-            cp "$EXDIR/boot.img" out/boot.img
-            file out/boot.img
-          fi
-          if [ -f "$EXDIR/vmlinuz" ]; then
-            cp "$EXDIR/vmlinuz" out/vmlinuz
-          fi
+          [ -f "$EXDIR/boot.img" ] && cp "$EXDIR/boot.img" out/boot.img && file out/boot.img
+          [ -f "$EXDIR/vmlinuz" ] && cp "$EXDIR/vmlinuz" out/vmlinuz
           for f in "$EXDIR/initramfs" "$EXDIR/initramfs.gz" "$EXDIR/initrd.img"; do
-            if [ -f "$f" ]; then
-              cp "$f" out/initramfs
-              break
-            fi
+            [ -f "$f" ] && cp "$f" out/initramfs && break
           done
-          echo "out/: $(ls -lh out/)"
+          echo "out/:"; ls -lh out/
 
       - name: Mount and extract modules + firmware
         run: |
-          # The xiaomi-begonia.img is a raw ext4 filesystem image (no partitions)
+          # xiaomi-begonia.img is a FULL DISK IMAGE (partitioned)
           SYSIMG=$(find pmos -name "xiaomi-begonia.img" | head -1)
-          if [ -z "$SYSIMG" ]; then
-            echo "ERROR: no system image found"
-            find pmos -type f -exec ls -lh {} \;
-            exit 1
-          fi
+          if [ -z "$SYSIMG" ]; then ls pmos/; exit 1; fi
           echo "System image: $(ls -lh $SYSIMG)"
-          
-          # Convert sparse to raw if needed
-          if file "$SYSIMG" | grep -q "sparse"; then
-            echo "Converting sparse image..."
-            simg2img "$SYSIMG" system-raw.img
-            ls -lh system-raw.img
-          else
-            cp "$SYSIMG" system-raw.img
+
+          # Convert sparse -> raw
+          file "$SYSIMG" | grep -q "sparse" && simg2img "$SYSIMG" system-raw.img || cp "$SYSIMG" system-raw.img
+          ls -lh system-raw.img
+
+          # Show partitions
+          fdisk -l system-raw.img 2>/dev/null || echo "No fdisk output"
+
+          # losetup -P creates partition devices
+          LOOP=$(sudo losetup -P -f --show -r system-raw.img)
+          echo "Loop: $LOOP"
+          ls -la ${LOOP}p* 2>/dev/null || echo "No partition nodes created"
+
+          FOUND=0
+          for part in ${LOOP}p*; do
+            [ -b "$part" ] || continue
+            echo "--- Mounting $part ---"
+            mkdir -p mnt
+            sudo mount -r "$part" mnt 2>/dev/null || { echo "mount failed"; continue; }
+            echo "mnt/: $(ls mnt/ 2>/dev/null | head -5)"
+
+            if [ -d mnt/lib/modules ]; then
+              KVER=$(ls mnt/lib/modules/ | head -1)
+              echo "FOUND modules: $KVER"
+              sudo tar -czf out/modules.tar.gz -C mnt/lib modules
+              ls -lh out/modules.tar.gz
+              FOUND=1
+            fi
+            if [ -d mnt/lib/firmware ]; then
+              echo "FOUND firmware"
+              sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
+              ls -lh out/firmware.tar.gz
+              FOUND=1
+            fi
+            sudo umount mnt
+          done
+
+          if [ "$FOUND" = "0" ]; then
+            echo "ERROR: No modules/firmware found!"
+            for part in ${LOOP}p*; do
+              [ -b "$part" ] || continue
+              mkdir -p m && sudo mount -r "$part" m 2>/dev/null && echo "--- $part ---" && ls m/ 2>/dev/null && sudo umount m || true
+            done
           fi
-          
-          # Mount directly (no kpartx - this is a filesystem image, not a disk)
-          mkdir -p mnt
-          sudo mount -o loop,ro system-raw.img mnt
-          
-          echo "=== Mounted at mnt/ ==="
-          ls mnt/
-          
-          # Extract modules
-          if [ -d mnt/lib/modules ]; then
-            KVER=$(ls mnt/lib/modules/ | head -1)
-            echo "Found kernel modules: $KVER"
-            sudo tar -czf out/modules.tar.gz -C mnt/lib modules
-            ls -lh out/modules.tar.gz
-          else
-            echo "No modules found in mnt/lib/modules"
-            ls mnt/lib/ 2>/dev/null || echo "lib/ not found"
-          fi
-          
-          # Extract firmware
-          if [ -d mnt/lib/firmware ]; then
-            sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
-            ls -lh out/firmware.tar.gz
-          else
-            echo "No firmware found"
-          fi
-          
-          sudo umount mnt
-          echo ""
-          echo "=== Final output ==="
-          ls -lh out/
+
+          sudo losetup -d "$LOOP" 2>/dev/null || true
+          echo "=== out/ ==="; ls -lh out/
 
       - name: Upload
         uses: actions/upload-artifact@v4
