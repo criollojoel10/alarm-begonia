@@ -1,1 +1,83 @@
-IyEvYmluL2J1c3lib3ggc2gKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIC9pbml0IOKAlCBJbml0cmFtZnMgbcOtbmltbyBwYXJhIEFyY2ggTGludXggQVJNIGVuIGJlZ29uaWEKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIEJ1c2NhIHJvb3RmcyBwb3IgbGFiZWwsIFVVSUQgbyBwYXJ0aWNpw7NuOyBoYWNlIHN3aXRjaF9yb290IGEgc3lzdGVtZAojID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CgpleHBvcnQgUEFUSD0vYmluOi9zYmluOi91c3IvYmluOi91c3Ivc2JpbgpleHBvcnQgU0hFTEw9L2Jpbi9zaAoKbW91bnQgLXQgcHJvYyBwcm9jIC9wcm9jCm1vdW50IC10IHN5c2ZzIHN5c2ZzIC9zeXMKbW91bnQgLXQgZGV2dG1wZnMgZGV2dG1wZnMgL2RldgoKZWNobyAiW2FyY2gtYmVnb25pYS1pbml0cmFtZnNdIG1vdW50aW5nIHJlcXVpcmVkIGZpbGVzeXN0ZW1zIgpta2RpciAtcCAvZGV2L3B0cyAvZGV2L3NobSAvcnVuCm1vdW50IC10IGRldnB0cyBkZXZwdHMgL2Rldi9wdHMKbW91bnQgLXQgdG1wZnMgdG1wZnMgL3J1bgoKTkVXUk9PVD0vbmV3cm9vdApta2RpciAtcCAkTkVXUk9PVAoKZWNobyAiW2FyY2gtYmVnb25pYS1pbml0cmFtZnNdIHNlYXJjaGluZyBmb3Igcm9vdGZzLi4uIgoKIyBFc3RyYXRlZ2lhIGRlIGLDunNxdWVkYSBwb3Igb3JkZW4gZGUgcHJlZmVyZW5jaWEKUk9PVF9GT1VORD0iIgoKIyAxLiBMYWJlbCBBcmNoUm9vdCAoYXJjaCByb290ZnMpCmlmIFsgLXogIiRST09UX0ZPVU5EIiBdICYmIFsgLWIgL2Rldi9kaXNrL2J5LWxhYmVsL0FyY2hSb290IF07IHRoZW4KICAgIGVjaG8gIlthcmNoLWJlZ29uaWEtaW5pdHJhbWZzXSBmb3VuZCBieSBsYWJlbDogQXJjaFJvb3QiCiAgICBtb3VudCAtdCBleHQ0IC9kZXYvZGlzay9ieS1sYWJlbC9BcmNoUm9vdCAkTkVXUk9PVCAyPi9kZXYvbnVsbCAmJiBST09UX0ZPVU5EPSJBcmNoUm9vdCIKZmkKCiMgMi4gTGFiZWwgcG1PU19yb290IChjb21wYXRpYmlsaWRhZCBjb24gcG1PUyBpbml0cmFtZnMpCmlmIFsgLXogIiRST09UX0ZPVU5EIiBdICYmIFsgLWIgL2Rldi9kaXNrL2J5LWxhYmVsL3BtT1Nfcm9vdCBdOyB0aGVuCiAgICBlY2hvICJbYXJjaC1iZWdvbmlhLWluaXRyYW1mc10gZm91bmQgYnkgbGFiZWw6IHBtT1Nfcm9vdCIKICAgIG1vdW50IC10IGV4dDQgL2Rldi9kaXNrL2J5LWxhYmVsL3BtT1Nfcm9vdCAkTkVXUk9PVCAyPi9kZXYvbnVsbCAmJiBST09UX0ZPVU5EPSJwbU9TX3Jvb3QiCmZpCgojIDMuIFVVSUQgZXNwZWPDrWZpY28gKHNlIGlueWVjdGEgZW4gYnVpbGQgdGltZSkKaWYgWyAteiAiJFJPT1RfRk9VTkQiIF0gJiYgWyAtbiAiJFJPT1RfVVVJRCIgXTsgdGhlbgogICAgZWNobyAiW2FyY2gtYmVnb25pYS1pbml0cmFtZnNdIHRyeWluZyBVVUlEOiAkUk9PVF9VVUlEIgogICAgbW91bnQgLXQgZXh0NCBVVUlEPSRST09UX1VVSUQgJE5FV1JPT1QgMj4vZGV2L251bGwgJiYgUk9PVF9GT1VORD0iVVVJRCIKZmkKCiMgNC4gUGFydGljacOzbiB1c2VyZGF0YSAoaW5zdGFsYWNpw7NuIGRpcmVjdGEgZW4gQW5kcm9pZCkKaWYgWyAteiAiJFJPT1RfRk9VTkQiIF0gJiYgWyAtYiAvZGV2L2Jsb2NrL2J5LW5hbWUvdXNlcmRhdGEgXTsgdGhlbgogICAgZWNobyAiW2FyY2gtYmVnb25pYS1pbml0cmFtZnNdIHRyeWluZyB1c2VyZGF0YSBwYXJ0aXRpb24iCiAgICBtb3VudCAtdCBleHQ0IC9kZXYvYmxvY2svYnktbmFtZS91c2VyZGF0YSAkTkVXUk9PVCAyPi9kZXYvbnVsbCAmJiBST09UX0ZPVU5EPSJ1c2VyZGF0YSIKZmkKCiMgNS4gU2NhbmVvIGdlbsOpcmljbyBkZSBwYXJ0aWNpb25lcyBleHQ0CmlmIFsgLXogIiRST09UX0ZPVU5EIiBdOyB0aGVuCiAgICBlY2hvICJbYXJjaC1iZWdvbmlhLWluaXRyYW1mc10gc2Nhbm5pbmcgZm9yIGV4dDQgcGFydGl0aW9ucy4uLiIKICAgIGZvciBwYXJ0IGluIC9kZXYvYmxvY2svKiAvZGV2L3NkKiAvZGV2L21tY2JsaypwKiAvZGV2L3ZkKjsgZG8KICAgICAgICBbIC1iICIkcGFydCIgXSB8fCBjb250aW51ZQogICAgICAgIG1vdW50IC10IGV4dDQgIiRwYXJ0IiAkTkVXUk9PVCAyPi9kZXYvbnVsbCB8fCBjb250aW51ZQogICAgICAgIGlmIFsgLXggJE5FV1JPT1Qvc2Jpbi9pbml0IF0gfHwgWyAteCAkTkVXUk9PVC91c3IvbGliL3N5c3RlbWQvc3lzdGVtZCBdOyB0aGVuCiAgICAgICAgICAgIGVjaG8gIlthcmNoLWJlZ29uaWEtaW5pdHJhbWZzXSBmb3VuZCByb290ZnMgb246ICRwYXJ0IgogICAgICAgICAgICBST09UX0ZPVU5EPSIkcGFydCIKICAgICAgICAgICAgYnJlYWsKICAgICAgICBmaQogICAgICAgIHVtb3VudCAkTkVXUk9PVCAyPi9kZXYvbnVsbAogICAgZG9uZQpmaQoKIyBTaSBubyBzZSBlbmNvbnRyw7MgbmFkYSwgc2hlbGwgZGUgZW1lcmdlbmNpYQppZiBbICEgLXggJE5FV1JPT1Qvc2Jpbi9pbml0IF0gJiYgWyAhIC14ICRORVdST09UL3Vzci9saWIvc3lzdGVtZC9zeXN0ZW1kIF07IHRoZW4KICAgIGVjaG8gIlthcmNoLWJlZ29uaWEtaW5pdHJhbWZzXSBFUlJPUjogcm9vdGZzIG5vdCBmb3VuZCBvciBpbnZhbGlkIgogICAgZWNobyAiW2FyY2gtYmVnb25pYS1pbml0cmFtZnNdIGRldmljZXMgYXZhaWxhYmxlOiIKICAgIGxzIC1sYSAvZGV2L2Jsb2NrLyAyPi9kZXYvbnVsbCB8fCBscyAtbGEgL2Rldi8gMj4vZGV2L251bGwgfHwgdHJ1ZQogICAgCiAgICBlY2hvICIiCiAgICBlY2hvICJbYXJjaC1iZWdvbmlhLWluaXRyYW1mc10gPT09IEVNRVJHRU5DWSBTSEVMTCA9PT0iCiAgICBlY2hvICJbYXJjaC1iZWdvbmlhLWluaXRyYW1mc10gTW91bnQgcm9vdCBtYW51YWxseSBhbmQgdHlwZSAnZXhpdCciCiAgICBleGVjIHNoCmZpCgojIExpbXBpYXIgeSBoYWNlciBzd2l0Y2hfcm9vdAplY2hvICJbYXJjaC1iZWdvbmlhLWluaXRyYW1mc10gc3dpdGNoaW5nIHRvIEFyY2ggTGludXggQVJNIgplY2hvICJbYXJjaC1iZWdvbmlhLWluaXRyYW1mc10gUElEIDEgd2lsbCBiZTogJChscyAtbGEgJE5FV1JPT1Qvc2Jpbi9pbml0IDI+L2Rldi9udWxsIHx8IGVjaG8gJ3N5c3RlbWQnKSIKCmV4ZWMgc3dpdGNoX3Jvb3QgJE5FV1JPT1QgL3NiaW4vaW5pdAo=
+#!/bin/busybox sh
+# =============================================================================
+# /init — Initramfs mínimo para Arch Linux ARM en begonia
+# =============================================================================
+# Busca rootfs por label, UUID o partición; hace switch_root a systemd
+# =============================================================================
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export SHELL=/bin/sh
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+echo "[arch-begonia-initramfs] mounting required filesystems"
+mkdir -p /dev/pts /dev/shm /run
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /run
+
+NEWROOT=/newroot
+mkdir -p $NEWROOT
+
+echo "[arch-begonia-initramfs] searching for rootfs..."
+
+# Estrategia de búsqueda por orden de preferencia
+ROOT_FOUND=""
+
+# 1. Label ArchRoot (arch rootfs)
+if [ -z "$ROOT_FOUND" ] && [ -b /dev/disk/by-label/ArchRoot ]; then
+    echo "[arch-begonia-initramfs] found by label: ArchRoot"
+    mount -t ext4 /dev/disk/by-label/ArchRoot $NEWROOT 2>/dev/null && ROOT_FOUND="ArchRoot"
+fi
+
+# 2. Label pmOS_root (compatibilidad con pmOS initramfs)
+if [ -z "$ROOT_FOUND" ] && [ -b /dev/disk/by-label/pmOS_root ]; then
+    echo "[arch-begonia-initramfs] found by label: pmOS_root"
+    mount -t ext4 /dev/disk/by-label/pmOS_root $NEWROOT 2>/dev/null && ROOT_FOUND="pmOS_root"
+fi
+
+# 3. UUID específico (se inyecta en build time)
+if [ -z "$ROOT_FOUND" ] && [ -n "$ROOT_UUID" ]; then
+    echo "[arch-begonia-initramfs] trying UUID: $ROOT_UUID"
+    mount -t ext4 UUID=$ROOT_UUID $NEWROOT 2>/dev/null && ROOT_FOUND="UUID"
+fi
+
+# 4. Partición userdata (instalación directa en Android)
+if [ -z "$ROOT_FOUND" ] && [ -b /dev/block/by-name/userdata ]; then
+    echo "[arch-begonia-initramfs] trying userdata partition"
+    mount -t ext4 /dev/block/by-name/userdata $NEWROOT 2>/dev/null && ROOT_FOUND="userdata"
+fi
+
+# 5. Scaneo genérico de particiones ext4
+if [ -z "$ROOT_FOUND" ]; then
+    echo "[arch-begonia-initramfs] scanning for ext4 partitions..."
+    for part in /dev/block/* /dev/sd* /dev/mmcblk*p* /dev/vd*; do
+        [ -b "$part" ] || continue
+        mount -t ext4 "$part" $NEWROOT 2>/dev/null || continue
+        if [ -x $NEWROOT/sbin/init ] || [ -x $NEWROOT/usr/lib/systemd/systemd ]; then
+            echo "[arch-begonia-initramfs] found rootfs on: $part"
+            ROOT_FOUND="$part"
+            break
+        fi
+        umount $NEWROOT 2>/dev/null
+    done
+fi
+
+# Si no se encontró nada, shell de emergencia
+if [ ! -x $NEWROOT/sbin/init ] && [ ! -x $NEWROOT/usr/lib/systemd/systemd ]; then
+    echo "[arch-begonia-initramfs] ERROR: rootfs not found or invalid"
+    echo "[arch-begonia-initramfs] devices available:"
+    ls -la /dev/block/ 2>/dev/null || ls -la /dev/ 2>/dev/null || true
+    
+    echo ""
+    echo "[arch-begonia-initramfs] === EMERGENCY SHELL ==="
+    echo "[arch-begonia-initramfs] Mount root manually and type 'exit'"
+    exec sh
+fi
+
+# Limpiar y hacer switch_root
+echo "[arch-begonia-initramfs] switching to Arch Linux ARM"
+echo "[arch-begonia-initramfs] PID 1 will be: $(ls -la $NEWROOT/sbin/init 2>/dev/null || echo 'systemd')"
+
+exec switch_root $NEWROOT /sbin/init

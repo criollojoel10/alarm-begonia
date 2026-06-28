@@ -1,1 +1,45 @@
-IyBQYXF1ZXRlcyBwYXJhIEFyY2ggTGludXggQVJNIGJlZ29uaWEgKGNvbnNvbGUvaGVhZGxlc3MpCiMgPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CiMgQmFzZSBzeXN0ZW0Kc3Vkbwp2aW0KbmFubwpvcGVuc3NoCnJzeW5jCmN1cmwKd2dldApnaXQKY2EtY2VydGlmaWNhdGVzCgojIE5ldHdvcmsKbmV0d29ya21hbmFnZXIKaXdkCmRoY3BjZAoKIyBTeXN0ZW0gdG9vbHMKdG11eApodG9wCmJ0b3AKaW90b3AKaWZ0b3AKbHNvZgpzdHJhY2UKdGNwZHVtcAp0cmVlCnVuemlwCmZpbGUKbWFuLWRiCgojIERldmVsb3BtZW50CmJhc2UtZGV2ZWwKcHl0aG9uMwpweXRob24tcGlwCgojIEhhcmR3YXJlCnVzYnV0aWxzCnBjaXV0aWxzCmxtX3NlbnNvcnMKZG1pZGVjb2RlCgojIEFyY2ggQVJNIHNwZWNpZmljCmFyY2hsaW51eGFybS1rZXlyaW5nCg==
+# Paquetes para Arch Linux ARM begonia (console/headless)
+# ======================================================
+# Base system
+sudo
+vim
+nano
+openssh
+rsync
+curl
+wget
+git
+ca-certificates
+
+# Network
+networkmanager
+iwd
+dhcpcd
+
+# System tools
+tmux
+htop
+btop
+iotop
+iftop
+lsof
+strace
+tcpdump
+tree
+unzip
+file
+man-db
+
+# Development
+base-devel
+python3
+python-pip
+
+# Hardware
+usbutils
+pciutils
+lm_sensors
+dmidecode
+
+# Arch ARM specific
+archlinuxarm-keyring

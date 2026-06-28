@@ -1,1 +1,37 @@
-IyEvYmluL2Jhc2gKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIGZpcnN0Ym9vdC5zaCDigJQgRWplY3V0YXIgZW4gcHJpbWVyIGFycmFucXVlIGRlIEFyY2ggYmVnb25pYQojID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CnNldCAtZXVvIHBpcGVmYWlsCgojIFNpbmNyb25pemFyIGhvcmEgKGNyw610aWNvIHBhcmEgcGFjbWFuIFRMUykKdGltZWRhdGVjdGwgc2V0LW50cCB0cnVlIHx8IHRydWUKCiMgSW5pY2lhbGl6YXIga2V5cmluZyBkZSBwYWNtYW4KcGFjbWFuLWtleSAtLWluaXQKcGFjbWFuLWtleSAtLXBvcHVsYXRlIGFyY2hsaW51eGFybQoKIyBSZWdlbmVyYXIgaW5pdHJhbWZzIGNvbiBta2luaXRjcGlvCm1raW5pdGNwaW8gLVAgfHwgdHJ1ZQoKIyBHZW5lcmFyIGNvbmZpZyBkZSByZWQKc3lzdGVtY3RsIGVuYWJsZSAtLW5vdyBzeXN0ZW1kLXJlc29sdmVkCmxuIC1zZiAvcnVuL3N5c3RlbWQvcmVzb2x2ZS9zdHViLXJlc29sdi5jb25mIC9ldGMvcmVzb2x2LmNvbmYKCiMgQ29uZmlndXJhciBOZXR3b3JrTWFuYWdlcgpzeXN0ZW1jdGwgZW5hYmxlIC0tbm93IE5ldHdvcmtNYW5hZ2VyCgojIENvbmZpZ3VyYXIgVGFpbHNjYWxlCmlmIGNvbW1hbmQgLXYgdGFpbHNjYWxlICY+L2Rldi9udWxsOyB0aGVuCiAgICBzeXN0ZW1jdGwgZW5hYmxlIC0tbm93IHRhaWxzY2FsZWQKZmkKCmVjaG8gIiIKZWNobyAiPT09IEFyY2ggTGludXggQVJNIGJlZ29uaWEgcmVhZHkgPT09IgplY2hvICIgIEhvc3RuYW1lOiAkKGhvc3RuYW1lKSIKZWNobyAiICBLZXJuZWw6ICQodW5hbWUgLXIpIgplY2hvICIgIEFyY2g6ICQodW5hbWUgLW0pIgplY2hvICIiCmVjaG8gIiAgRm9yIFRhaWxzY2FsZToiCmVjaG8gIiAgICB0YWlsc2NhbGUgdXAgLS1hY2NlcHQtcm91dGVzIgplY2hvICIiCg==
+#!/bin/bash
+# =============================================================================
+# firstboot.sh — Ejecutar en primer arranque de Arch begonia
+# =============================================================================
+set -euo pipefail
+
+# Sincronizar hora (crítico para pacman TLS)
+timedatectl set-ntp true || true
+
+# Inicializar keyring de pacman
+pacman-key --init
+pacman-key --populate archlinuxarm
+
+# Regenerar initramfs con mkinitcpio
+mkinitcpio -P || true
+
+# Generar config de red
+systemctl enable --now systemd-resolved
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+
+# Configurar NetworkManager
+systemctl enable --now NetworkManager
+
+# Configurar Tailscale
+if command -v tailscale &>/dev/null; then
+    systemctl enable --now tailscaled
+fi
+
+echo ""
+echo "=== Arch Linux ARM begonia ready ==="
+echo "  Hostname: $(hostname)"
+echo "  Kernel: $(uname -r)"
+echo "  Arch: $(uname -m)"
+echo ""
+echo "  For Tailscale:"
+echo "    tailscale up --accept-routes"
+echo ""

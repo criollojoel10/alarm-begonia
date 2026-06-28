@@ -1,1 +1,52 @@
-IyEvYmluL2Jhc2gKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIGJ1aWxkLWluaXRyYW1mcy5zaCDigJQgQ29uc3RydWlyIGluaXRyYW1mcyBwYXJhIEFyY2ggTGludXggQVJNIGJlZ29uaWEKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIFVzbzogYnVpbGQtaW5pdHJhbWZzLnNoIDxyb290ZnMtbW91bnQtcG9pbnQ+CiMgPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0Kc2V0IC1ldW8gcGlwZWZhaWwKClJPT1RGUz0iJHsxOi1tbnR9IgpPVVRESVI9IiR7MjotLn0iCgppZiBbICEgLWQgIiRST09URlMiIF07IHRoZW4KICAgIGVjaG8gIkVycm9yOiByb290ZnMgbW91bnQgcG9pbnQgbm90IGZvdW5kOiAkUk9PVEZTIgogICAgZXhpdCAxCmZpCgplY2hvICI9PT0gQnVpbGRpbmcgQXJjaCBpbml0cmFtZnMgZm9yIGJlZ29uaWEgPT09IgoKQlVJTERfRElSPSQobWt0ZW1wIC1kKQp0cmFwICJybSAtcmYgJEJVSUxEX0RJUiIgRVhJVAoKIyBDb3B5IGluaXQgc2NyaXB0CmNwICIkKGRpcm5hbWUgIiQwIikvaW5pdCIgIiRCVUlMRF9ESVIvaW5pdCIKY2htb2QgK3ggIiRCVUlMRF9ESVIvaW5pdCIKCiMgQ29weSBidXN5Ym94IChtdXN0IGJlIHN0YXRpYykKaWYgWyAtZiAiJFJPT1RGUy91c3IvYmluL2J1c3lib3giIF07IHRoZW4KICAgIGNwICIkUk9PVEZTL3Vzci9iaW4vYnVzeWJveCIgIiRCVUlMRF9ESVIvYnVzeWJveCIKZWxpZiBbIC1mICIkUk9PVEZTL2Jpbi9idXN5Ym94IiBdOyB0aGVuCiAgICBjcCAiJFJPT1RGUy9iaW4vYnVzeWJveCIgIiRCVUlMRF9ESVIvYnVzeWJveCIKZmkKCiMgQ29weSBtaW5pbWFsIGJ1c3lib3ggYXBwbGV0IHN5bWxpbmtzCmZvciBhcHBsZXQgaW4gc2ggbW91bnQgdW1vdW50IG1rZGlyIGxzIGNhdCBlY2hvIHNsZWVwIGxzYmxrIGxvc2V0dXAgbW9kcHJvYmU7IGRvCiAgICBsbiAtc2YgYnVzeWJveCAiJEJVSUxEX0RJUi8kYXBwbGV0IiAyPi9kZXYvbnVsbCB8fCB0cnVlCmRvbmUKCiMgS2VybmVsIG1vZHVsZXMgc3RvcmFnZSAob3B0aW9uYWwsIGZvciBtb3VudCBoZWxwZXJzKQpta2RpciAtcCAiJEJVSUxEX0RJUi9saWIvbW9kdWxlcyIKCiMgTWFrZSBkZXZpY2Ugbm9kZXMKbWtkaXIgLXAgIiRCVUlMRF9ESVIvZGV2Igpta2RpciAtcCAiJEJVSUxEX0RJUi9wcm9jIiAiJEJVSUxEX0RJUi9zeXMiICIkQlVJTERfRElSL3J1biIKCiMgQ3JlYXRlIGNwaW8gYXJjaGl2ZQpjZCAiJEJVSUxEX0RJUiIKZmluZCAuIC1wcmludDAgfCBjcGlvIC0tbnVsbCAtLWNyZWF0ZSAtLWZvcm1hdD1uZXdjIC0tcXVpZXQgfCBnemlwIC05ID4gIiRPVVRESVIvYXJjaC1pbml0cmFtZnMuZ3oiCgplY2hvICI9PT0gSW5pdHJhbWZzIGJ1aWx0ID09PSIKZWNobyAiICBTaXplOiAkKHdjIC1jIDwgIiRPVVRESVIvYXJjaC1pbml0cmFtZnMuZ3oiKSBieXRlcyAoJChkdSAtaCAiJE9VVERJUi9hcmNoLWluaXRyYW1mcy5neiIgfCBjdXQgLWYxKSkiCmVjaG8gIiAgUGF0aDogJE9VVERJUi9hcmNoLWluaXRyYW1mcy5neiIKbHMgLWxoICIkT1VURElSL2FyY2gtaW5pdHJhbWZzLmd6Ig==
+#!/bin/bash
+# =============================================================================
+# build-initramfs.sh — Construir initramfs para Arch Linux ARM begonia
+# =============================================================================
+# Uso: build-initramfs.sh <rootfs-mount-point>
+# =============================================================================
+set -euo pipefail
+
+ROOTFS="${1:-mnt}"
+OUTDIR="${2:-.}"
+
+if [ ! -d "$ROOTFS" ]; then
+    echo "Error: rootfs mount point not found: $ROOTFS"
+    exit 1
+fi
+
+echo "=== Building Arch initramfs for begonia ==="
+
+BUILD_DIR=$(mktemp -d)
+trap "rm -rf $BUILD_DIR" EXIT
+
+# Copy init script
+cp "$(dirname "$0")/init" "$BUILD_DIR/init"
+chmod +x "$BUILD_DIR/init"
+
+# Copy busybox (must be static)
+if [ -f "$ROOTFS/usr/bin/busybox" ]; then
+    cp "$ROOTFS/usr/bin/busybox" "$BUILD_DIR/busybox"
+elif [ -f "$ROOTFS/bin/busybox" ]; then
+    cp "$ROOTFS/bin/busybox" "$BUILD_DIR/busybox"
+fi
+
+# Copy minimal busybox applet symlinks
+for applet in sh mount umount mkdir ls cat echo sleep lsblk losetup modprobe; do
+    ln -sf busybox "$BUILD_DIR/$applet" 2>/dev/null || true
+done
+
+# Kernel modules storage (optional, for mount helpers)
+mkdir -p "$BUILD_DIR/lib/modules"
+
+# Make device nodes
+mkdir -p "$BUILD_DIR/dev"
+mkdir -p "$BUILD_DIR/proc" "$BUILD_DIR/sys" "$BUILD_DIR/run"
+
+# Create cpio archive
+cd "$BUILD_DIR"
+find . -print0 | cpio --null --create --format=newc --quiet | gzip -9 > "$OUTDIR/arch-initramfs.gz"
+
+echo "=== Initramfs built ==="
+echo "  Size: $(wc -c < "$OUTDIR/arch-initramfs.gz") bytes ($(du -h "$OUTDIR/arch-initramfs.gz" | cut -f1))"
+echo "  Path: $OUTDIR/arch-initramfs.gz"
+ls -lh "$OUTDIR/arch-initramfs.gz"

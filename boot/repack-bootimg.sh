@@ -1,1 +1,71 @@
-IyEvYmluL2Jhc2gKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIHJlcGFjay1ib290aW1nLnNoIOKAlCBSZWNvbnN0cnVpciBib290LmltZyBjb24ga2VybmVsIHBtT1MgKyBpbml0cmFtZnMgQXJjaAojID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CiMgVXNvOiByZXBhY2stYm9vdGltZy5zaCA8cG1vcy1ib290LmltZz4gPGFyY2gtaW5pdHJhbWZzLmd6PiA8b3V0cHV0LmltZz4KIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQpzZXQgLWV1byBwaXBlZmFpbAoKUE1PU19CT09UPSIkezE6LXBtb3MtYmFzZS9pbWFnZXMvYm9vdC5pbWd9IgpBUkNIX0lOSVRSQU1GUz0iJHsyOi1hcmNoLWluaXRyYW1mcy5nen0iCk9VVFBVVD0iJHszOi1ib290LWJlZ29uaWEtYXJjaC5pbWd9IgoKaWYgWyAhIC1mICIkUE1PU19CT09UIiBdOyB0aGVuCiAgICBlY2hvICJFcnJvcjogcG1PUyBib290LmltZyBub3QgZm91bmQ6ICRQTU9TX0JPT1QiCiAgICBleGl0IDEKZmkKCmlmIFsgISAtZiAiJEFSQ0hfSU5JVFJBTUZTIiBdOyB0aGVuCiAgICBlY2hvICJXYXJuaW5nOiBBcmNoIGluaXRyYW1mcyBub3QgZm91bmQsIHVzaW5nIHBtT1MgaW5pdHJhbWZzIgogICAgY3AgIiRQTU9TX0JPT1QiICIkT1VUUFVUIgogICAgZWNobyAiT3V0cHV0OiAkT1VUUFVUIChwbU9TIG9yaWdpbmFsKSIKICAgIGV4aXQgMApmaQoKZWNobyAiPT09IFJlcGFja2luZyBib290LmltZyBmb3IgQXJjaCBiZWdvbmlhID09PSIKCiMgRXh0cmFjdCBib290LmltZyBwYXJhbWV0ZXJzIHVzaW5nIG1rYm9vdGltZyB0b29scwpXT1JLRElSPSQobWt0ZW1wIC1kKQp0cmFwICJybSAtcmYgJFdPUktESVIiIEVYSVQKCmNkICIkV09SS0RJUiIKCiMgVHJ5IHVucGFja19ib290aW1nIChBbmRyb2lkIFNESykKaWYgY29tbWFuZCAtdiB1bnBhY2tfYm9vdGltZyAmPi9kZXYvbnVsbDsgdGhlbgogICAgZWNobyAiVXNpbmcgdW5wYWNrX2Jvb3RpbWcuLi4iCiAgICB1bnBhY2tfYm9vdGltZyAtLWJvb3RfaW1nICIkT0xEUFdELyRQTU9TX0JPT1QiIC0tb3V0IGV4dHJhY3RlZCAyPiYxIHwgaGVhZCAtNQoKICAgICMgUmVwYWNrIHdpdGggbmV3IGluaXRyYW1mcwogICAgbWtib290aW1nIFwKICAgICAgICAtLWtlcm5lbCBleHRyYWN0ZWQva2VybmVsIFwKICAgICAgICAtLXJhbWRpc2sgIiRPTERQV0QvJEFSQ0hfSU5JVFJBTUZTIiBcCiAgICAgICAgLS1kdGIgZXh0cmFjdGVkL2R0YiAyPi9kZXYvbnVsbCB8fCBcCiAgICBta2Jvb3RpbWcgXAogICAgICAgIC0ta2VybmVsIGV4dHJhY3RlZC9rZXJuZWwgXAogICAgICAgIC0tcmFtZGlzayAiJE9MRFBXRC8kQVJDSF9JTklUUkFNRlMiIFwKICAgICAgICAtLWNtZGxpbmUgIiQoY2F0IGV4dHJhY3RlZC9jbWRsaW5lIDI+L2Rldi9udWxsIHx8IGVjaG8gJycpIiBcCiAgICAgICAgLS1iYXNlICIkKGNhdCBleHRyYWN0ZWQvYmFzZSAyPi9kZXYvbnVsbCB8fCBlY2hvICcweDQwMDAwMDAwJykiIFwKICAgICAgICAtLXBhZ2VzaXplICIkKGNhdCBleHRyYWN0ZWQvcGFnZXNpemUgMj4vZGV2L251bGwgfHwgZWNobyAnMjA0OCcpIiBcCiAgICAgICAgLS1vc192ZXJzaW9uICIkKGNhdCBleHRyYWN0ZWQvb3NfdmVyc2lvbiAyPi9kZXYvbnVsbCB8fCBlY2hvICcxNS4wLjAnKSIgXAogICAgICAgIC0tb3NfcGF0Y2hfbGV2ZWwgIiQoY2F0IGV4dHJhY3RlZC9vc19wYXRjaF9sZXZlbCAyPi9kZXYvbnVsbCB8fCBlY2hvICcyMTI2LTA1LTAxJykiIFwKICAgICAgICAtLW91dHB1dCAiJE9MRFBXRC8kT1VUUFVUIgplbHNlCiAgICAjIEZhbGxiYWNrOiB1c2UgcG1ib290c3RyYXAgYm9vdGltZ19hbmFseXplIGFuZCBhYm9vdGltZwogICAgZWNobyAiQ2hlY2tpbmcgaWYgYWJvb3RpbWcgaXMgYXZhaWxhYmxlLi4uIgogICAgaWYgY29tbWFuZCAtdiBhYm9vdGltZyAmPi9kZXYvbnVsbDsgdGhlbgogICAgICAgIGFib290aW1nIC14ICIkT0xEUFdELyRQTU9TX0JPT1QiCiAgICAgICAgYWJvb3RpbWcgLS1jcmVhdGUgIiRPTERQV0QvJE9VVFBVVCIgLWsgekltYWdlIC1yICIkT0xEUFdELyRBUkNIX0lOSVRSQU1GUyIgLWYgYm9vdGltZy5jZmcgfHwKICAgICAgICBhYm9vdGltZyAtdSAiJE9MRFBXRC8kUE1PU19CT09UIiAtciAiJE9MRFBXRC8kQVJDSF9JTklUUkFNRlMiICYmIFwKICAgICAgICAgIGNwICIkT0xEUFdELyRQTU9TX0JPT1QiICIkT0xEUFdELyRPVVRQVVQiCiAgICBlbHNlCiAgICAgICAgZWNobyAiTm8gbWtib290aW1nL2Fib290aW1nIGF2YWlsYWJsZSwgdXNpbmcgb3JpZ2luYWwgYm9vdC5pbWcgd2l0aCBpbml0cmFtZnMgYXBwZW5kZWQiCiAgICAgICAgIyBMYXN0IHJlc29ydDogY29weSBvcmlnaW5hbCAocG1PUyBpbml0cmFtZnMgc3RheXMpCiAgICAgICAgY3AgIiRPTERQV0QvJFBNT1NfQk9PVCIgIiRPTERQV0QvJE9VVFBVVCIKICAgICAgICBlY2hvICLimqDvuI8gVXNpbmcgb3JpZ2luYWwgYm9vdC5pbWcgKHBtT1MgaW5pdHJhbWZzLCBOT1QgQXJjaCkiCiAgICBmaQpmaQoKZWNobyAiIgplY2hvICI9PT0gQm9vdCBpbWFnZSByZXBhY2tlZCA9PT0iCmxzIC1saCAiJE9MRFBXRC8kT1VUUFVUIgpmaWxlICIkT0xEUFdELyRPVVRQVVQi
+#!/bin/bash
+# =============================================================================
+# repack-bootimg.sh — Reconstruir boot.img con kernel pmOS + initramfs Arch
+# =============================================================================
+# Uso: repack-bootimg.sh <pmos-boot.img> <arch-initramfs.gz> <output.img>
+# =============================================================================
+set -euo pipefail
+
+PMOS_BOOT="${1:-pmos-base/images/boot.img}"
+ARCH_INITRAMFS="${2:-arch-initramfs.gz}"
+OUTPUT="${3:-boot-begonia-arch.img}"
+
+if [ ! -f "$PMOS_BOOT" ]; then
+    echo "Error: pmOS boot.img not found: $PMOS_BOOT"
+    exit 1
+fi
+
+if [ ! -f "$ARCH_INITRAMFS" ]; then
+    echo "Warning: Arch initramfs not found, using pmOS initramfs"
+    cp "$PMOS_BOOT" "$OUTPUT"
+    echo "Output: $OUTPUT (pmOS original)"
+    exit 0
+fi
+
+echo "=== Repacking boot.img for Arch begonia ==="
+
+# Extract boot.img parameters using mkbootimg tools
+WORKDIR=$(mktemp -d)
+trap "rm -rf $WORKDIR" EXIT
+
+cd "$WORKDIR"
+
+# Try unpack_bootimg (Android SDK)
+if command -v unpack_bootimg &>/dev/null; then
+    echo "Using unpack_bootimg..."
+    unpack_bootimg --boot_img "$OLDPWD/$PMOS_BOOT" --out extracted 2>&1 | head -5
+
+    # Repack with new initramfs
+    mkbootimg \
+        --kernel extracted/kernel \
+        --ramdisk "$OLDPWD/$ARCH_INITRAMFS" \
+        --dtb extracted/dtb 2>/dev/null || \
+    mkbootimg \
+        --kernel extracted/kernel \
+        --ramdisk "$OLDPWD/$ARCH_INITRAMFS" \
+        --cmdline "$(cat extracted/cmdline 2>/dev/null || echo '')" \
+        --base "$(cat extracted/base 2>/dev/null || echo '0x40000000')" \
+        --pagesize "$(cat extracted/pagesize 2>/dev/null || echo '2048')" \
+        --os_version "$(cat extracted/os_version 2>/dev/null || echo '15.0.0')" \
+        --os_patch_level "$(cat extracted/os_patch_level 2>/dev/null || echo '2126-05-01')" \
+        --output "$OLDPWD/$OUTPUT"
+else
+    # Fallback: use pmbootstrap bootimg_analyze and abootimg
+    echo "Checking if abootimg is available..."
+    if command -v abootimg &>/dev/null; then
+        abootimg -x "$OLDPWD/$PMOS_BOOT"
+        abootimg --create "$OLDPWD/$OUTPUT" -k zImage -r "$OLDPWD/$ARCH_INITRAMFS" -f bootimg.cfg ||
+        abootimg -u "$OLDPWD/$PMOS_BOOT" -r "$OLDPWD/$ARCH_INITRAMFS" && \
+          cp "$OLDPWD/$PMOS_BOOT" "$OLDPWD/$OUTPUT"
+    else
+        echo "No mkbootimg/abootimg available, using original boot.img with initramfs appended"
+        # Last resort: copy original (pmOS initramfs stays)
+        cp "$OLDPWD/$PMOS_BOOT" "$OLDPWD/$OUTPUT"
+        echo "⚠️ Using original boot.img (pmOS initramfs, NOT Arch)"
+    fi
+fi
+
+echo ""
+echo "=== Boot image repacked ==="
+ls -lh "$OLDPWD/$OUTPUT"
+file "$OLDPWD/$OUTPUT"

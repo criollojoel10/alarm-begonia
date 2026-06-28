@@ -1,1 +1,24 @@
-IyBpbml0cmFtZnMvZmlsZXMubGlzdCDigJQgQXJjaGl2b3MgYSBpbmNsdWlyIGVuIGluaXRyYW1mcwojIFJ1dGFzIHJlbGF0aXZhcyBhbCByb290ZnMgbW9udGFkbwp1c3IvYmluL2J1c3lib3gKdXNyL2xpYi9zeXN0ZW1kL3N5c3RlbWQKc2Jpbi9pbml0CnVzci9iaW4vc2gKYmluL3NoCmV0Yy9sZC5zby5jYWNoZQpldGMvbGQuc28uY29uZgpsaWIvbGQtbGludXgtYWFyY2g2NC5zby4xCmxpYi9hYXJjaDY0LWxpbnV4LWdudS9saWJjLnNvLjYKbGliL2FhcmNoNjQtbGludXgtZ251L2xpYm0uc28uNgpsaWIvYWFyY2g2NC1saW51eC1nbnUvbGlicHRocmVhZC5zby4wCmxpYi9hYXJjaDY0LWxpbnV4LWdudS9saWJkbC5zby4yCmxpYi9hYXJjaDY0LWxpbnV4LWdudS9saWJydC5zby4xCmxpYi9hYXJjaDY0LWxpbnV4LWdudS9saWJtb3VudC5zby4xCmxpYi9hYXJjaDY0LWxpbnV4LWdudS9saWJibGtpZC5zby4xCmxpYi9hYXJjaDY0LWxpbnV4LWdudS9saWJ1dWlkLnNvLjEKbGliL2FhcmNoNjQtbGludXgtZ251L2xpYnNlbGludXguc28uMQpsaWIvYWFyY2g2NC1saW51eC1nbnUvbGlicGNyZTItOC5zby4wCmxpYi9hYXJjaDY0LWxpbnV4LWdudS9saWJ6LnNvLjEKbGliL2FhcmNoNjQtbGludXgtZ251L2xpYnVkZXYuc28uMQpsaWIvYWFyY2g2NC1saW51eC1nbnUvbGlianNvbi1jLnNvLioKbGliL2FhcmNoNjQtbGludXgtZ251L2xpYmNyeXB0LnNvLjIK
+# initramfs/files.list — Archivos a incluir en initramfs
+# Rutas relativas al rootfs montado
+usr/bin/busybox
+usr/lib/systemd/systemd
+sbin/init
+usr/bin/sh
+bin/sh
+etc/ld.so.cache
+etc/ld.so.conf
+lib/ld-linux-aarch64.so.1
+lib/aarch64-linux-gnu/libc.so.6
+lib/aarch64-linux-gnu/libm.so.6
+lib/aarch64-linux-gnu/libpthread.so.0
+lib/aarch64-linux-gnu/libdl.so.2
+lib/aarch64-linux-gnu/librt.so.1
+lib/aarch64-linux-gnu/libmount.so.1
+lib/aarch64-linux-gnu/libblkid.so.1
+lib/aarch64-linux-gnu/libuuid.so.1
+lib/aarch64-linux-gnu/libselinux.so.1
+lib/aarch64-linux-gnu/libpcre2-8.so.0
+lib/aarch64-linux-gnu/libz.so.1
+lib/aarch64-linux-gnu/libudev.so.1
+lib/aarch64-linux-gnu/libjson-c.so.*
+lib/aarch64-linux-gnu/libcrypt.so.2

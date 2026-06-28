@@ -1,1 +1,43 @@
-IyEvYmluL2Jhc2gKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIHNlcnZpY2VzLnNoIOKAlCBDb25maWd1cmFyIHNlcnZpY2lvcyBwYXJhIGJlZ29uaWEgY29uc29sZQojID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CnNldCAtZXVvIHBpcGVmYWlsCgpST09URlM9IiR7MTotbW50fSIKU0NSSVBUX0RJUj0iJChkaXJuYW1lICIkMCIpIgoKaWYgWyAhIC1kICIkUk9PVEZTIiBdOyB0aGVuCiAgICBlY2hvICJFcnJvcjogJFJPT1RGUyBub3QgZm91bmQiCiAgICBleGl0IDEKZmkKCmVjaG8gIj09PSBDb25maWd1cmluZyBBcmNoIHNlcnZpY2VzIGZvciBiZWdvbmlhID09PSIKCnN1ZG8gc3lzdGVtZC1uc3Bhd24gLUQgIiRST09URlMiIC0tcGlwZSBiYXNoIC1jICcKICAgIGVjaG8gIi0tLSBTZXR0aW5nIGRlZmF1bHQgdGFyZ2V0IC0tLSIKICAgIHN5c3RlbWN0bCBzZXQtZGVmYXVsdCBtdWx0aS11c2VyLnRhcmdldAoKICAgIGVjaG8gIi0tLSBFbmFibGluZyBzZXJ2aWNlcyAtLS0iCiAgICBzeXN0ZW1jdGwgZW5hYmxlIHNzaGQKICAgIHN5c3RlbWN0bCBlbmFibGUgTmV0d29ya01hbmFnZXIKICAgIHN5c3RlbWN0bCBlbmFibGUgc3lzdGVtZC1yZXNvbHZlZAogICAgc3lzdGVtY3RsIGVuYWJsZSBzeXN0ZW1kLXRpbWVzeW5jZAoKICAgIGVjaG8gIi0tLSBEaXNhYmxpbmcgbmV0d29yay1vbmxpbmUgd2FpdCAoc3BlZWRzIGJvb3QpIC0tLSIKICAgIHN5c3RlbWN0bCBkaXNhYmxlIHN5c3RlbWQtbmV0d29ya2Qtd2FpdC1vbmxpbmUgMj4vZGV2L251bGwgfHwgdHJ1ZQoKICAgIGVjaG8gIi0tLSBTU0ggY29uZmlnIC0tLSIKICAgIHNlZCAtaSAicy8jUGVybWl0Um9vdExvZ2luLiovUGVybWl0Um9vdExvZ2luIHllcy8iIC9ldGMvc3NoL3NzaGRfY29uZmlnCiAgICBzZWQgLWkgInMvI1Bhc3N3b3JkQXV0aGVudGljYXRpb24uKi9QYXNzd29yZEF1dGhlbnRpY2F0aW9uIHllcy8iIC9ldGMvc3NoL3NzaGRfY29uZmlnCgogICAgZWNobyAiLS0tIEhvc3RuYW1lIC0tLSIKICAgIGVjaG8gImJlZ29uaWEtYWxhcm0iID4gL2V0Yy9ob3N0bmFtZQoKICAgIGVjaG8gIi0tLSBMb2NhbGUgLS0tIgogICAgZWNobyAiZW5fVVMuVVRGLTggVVRGLTgiID4+IC9ldGMvbG9jYWxlLmdlbgogICAgbG9jYWxlLWdlbiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICBlY2hvICJMQU5HPWVuX1VTLlVURi04IiA+IC9ldGMvbG9jYWxlLmNvbmYKJyB8fCBlY2hvICJXYXJuaW5nOiBzb21lIHNlcnZpY2VzIG1heSBoYXZlIGlzc3VlcyBpbiBuc3Bhd24iCgplY2hvICI9PT0gU2VydmljZSBjb25maWd1cmF0aW9uIGNvbXBsZXRlID09PSI=
+#!/bin/bash
+# =============================================================================
+# services.sh — Configurar servicios para begonia console
+# =============================================================================
+set -euo pipefail
+
+ROOTFS="${1:-mnt}"
+SCRIPT_DIR="$(dirname "$0")"
+
+if [ ! -d "$ROOTFS" ]; then
+    echo "Error: $ROOTFS not found"
+    exit 1
+fi
+
+echo "=== Configuring Arch services for begonia ==="
+
+sudo systemd-nspawn -D "$ROOTFS" --pipe bash -c '
+    echo "--- Setting default target ---"
+    systemctl set-default multi-user.target
+
+    echo "--- Enabling services ---"
+    systemctl enable sshd
+    systemctl enable NetworkManager
+    systemctl enable systemd-resolved
+    systemctl enable systemd-timesyncd
+
+    echo "--- Disabling network-online wait (speeds boot) ---"
+    systemctl disable systemd-networkd-wait-online 2>/dev/null || true
+
+    echo "--- SSH config ---"
+    sed -i "s/#PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
+    sed -i "s/#PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
+
+    echo "--- Hostname ---"
+    echo "begonia-alarm" > /etc/hostname
+
+    echo "--- Locale ---"
+    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+    locale-gen 2>/dev/null || true
+    echo "LANG=en_US.UTF-8" > /etc/locale.conf
+' || echo "Warning: some services may have issues in nspawn"
+
+echo "=== Service configuration complete ==="

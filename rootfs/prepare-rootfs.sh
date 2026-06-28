@@ -1,1 +1,60 @@
-IyEvYmluL2Jhc2gKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIHByZXBhcmUtcm9vdGZzLnNoIOKAlCBQcmVwYXJhciByb290ZnMgQXJjaCBMaW51eCBBUk0gcGFyYSBiZWdvbmlhCiMgPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0Kc2V0IC1ldW8gcGlwZWZhaWwKClJPT1RGUz0iJHsxOi1tbnR9IgpTUkNfTU9EVUxFUz0iJHsyOi1tb2R1bGVzfSIKU1JDX0ZJUk1XQVJFPSIkezM6LWZpcm13YXJlfSIKCmlmIFsgISAtZCAiJFJPT1RGUyIgXTsgdGhlbgogICAgZWNobyAiRXJyb3I6ICRST09URlMgbm90IGZvdW5kIgogICAgZXhpdCAxCmZpCgplY2hvICI9PT0gUHJlcGFyaW5nIEFyY2ggTGludXggQVJNIHJvb3RmcyBmb3IgYmVnb25pYSA9PT0iCgojIDEuIEluamVjdCBrZXJuZWwgbW9kdWxlcwppZiBbIC1kICIkU1JDX01PRFVMRVMiIF07IHRoZW4KICAgIGVjaG8gIi0tLSBJbmplY3Rpbmcga2VybmVsIG1vZHVsZXMgLS0tIgogICAgS1ZFUj0kKGxzICIkU1JDX01PRFVMRVMiIHwgZ3JlcCAtdiAnXC50YXJcLmd6JyB8IGhlYWQgLTEpCiAgICBpZiBbIC1uICIkS1ZFUiIgXTsgdGhlbgogICAgICAgIHN1ZG8gbWtkaXIgLXAgIiRST09URlMvdXNyL2xpYi9tb2R1bGVzLyRLVkVSIgogICAgICAgIHN1ZG8gY3AgLWEgIiRTUkNfTU9EVUxFUy8kS1ZFUiIvKiAiJFJPT1RGUy91c3IvbGliL21vZHVsZXMvJEtWRVIvIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICAgICAgZWNobyAiTW9kdWxlcyBmb3Iga2VybmVsICRLVkVSIGluamVjdGVkIgogICAgZmkKZmkKCiMgMi4gSW5qZWN0IGZpcm13YXJlCmlmIFsgLWQgIiRTUkNfRklSTVdBUkUiIF07IHRoZW4KICAgIGVjaG8gIi0tLSBJbmplY3RpbmcgZmlybXdhcmUgLS0tIgogICAgc3VkbyBta2RpciAtcCAiJFJPT1RGUy91c3IvbGliL2Zpcm13YXJlIgogICAgc3VkbyBjcCAtYSAiJFNSQ19GSVJNV0FSRSIvKiAiJFJPT1RGUy91c3IvbGliL2Zpcm13YXJlLyIgMj4vZGV2L251bGwgfHwgdHJ1ZQogICAgZWNobyAiRmlybXdhcmUgaW5qZWN0ZWQiCmZpCgojIDMuIFNldCBjb25zb2xlIHRhcmdldCBhbmQgc2VydmljZXMKZWNobyAiLS0tIENvbmZpZ3VyaW5nIHNlcnZpY2VzIC0tLSIKc3VkbyBzeXN0ZW1kLW5zcGF3biAtRCAiJFJPT1RGUyIgLS1waXBlIHNoIC1jICcKICAgIHN5c3RlbWN0bCBzZXQtZGVmYXVsdCBtdWx0aS11c2VyLnRhcmdldAogICAgc3lzdGVtY3RsIGVuYWJsZSBzc2hkCiAgICBzeXN0ZW1jdGwgZW5hYmxlIE5ldHdvcmtNYW5hZ2VyCiAgICBzeXN0ZW1jdGwgZW5hYmxlIHN5c3RlbWQtcmVzb2x2ZWQKICAgIHN5c3RlbWN0bCBlbmFibGUgc3lzdGVtZC10aW1lc3luY2QKCiAgICAjIFVzZXIgc2V0dXAKICAgIGVjaG8gLWUgInJvb3RcbnJvb3RcbiIgfCBwYXNzd2Qgcm9vdCAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICBlY2hvICJQZXJtaXRSb290TG9naW4geWVzIiA+PiAvZXRjL3NzaC9zc2hkX2NvbmZpZwonIHx8IHRydWUKCiMgNC4gU2V0IGhvc3RuYW1lCmVjaG8gImJlZ29uaWEtYWxhcm0iIHwgc3VkbyB0ZWUgIiRST09URlMvZXRjL2hvc3RuYW1lIgoKIyA1LiBGaXJzdGJvb3QgY29uZmlnCmlmIFsgLWYgZmlyc3Rib290LnNoIF07IHRoZW4KICAgIHN1ZG8gbWtkaXIgLXAgIiRST09URlMvZXRjL3N5c3RlbWQvc3lzdGVtIgogICAgc3VkbyBjcCBmaXJzdGJvb3Quc2ggIiRST09URlMvcm9vdC8iCmZpCgplY2hvICI9PT0gUm9vdGZzIHByZXBhcmF0aW9uIGNvbXBsZXRlID09PSI=
+#!/bin/bash
+# =============================================================================
+# prepare-rootfs.sh — Preparar rootfs Arch Linux ARM para begonia
+# =============================================================================
+set -euo pipefail
+
+ROOTFS="${1:-mnt}"
+SRC_MODULES="${2:-modules}"
+SRC_FIRMWARE="${3:-firmware}"
+
+if [ ! -d "$ROOTFS" ]; then
+    echo "Error: $ROOTFS not found"
+    exit 1
+fi
+
+echo "=== Preparing Arch Linux ARM rootfs for begonia ==="
+
+# 1. Inject kernel modules
+if [ -d "$SRC_MODULES" ]; then
+    echo "--- Injecting kernel modules ---"
+    KVER=$(ls "$SRC_MODULES" | grep -v '\.tar\.gz' | head -1)
+    if [ -n "$KVER" ]; then
+        sudo mkdir -p "$ROOTFS/usr/lib/modules/$KVER"
+        sudo cp -a "$SRC_MODULES/$KVER"/* "$ROOTFS/usr/lib/modules/$KVER/" 2>/dev/null || true
+        echo "Modules for kernel $KVER injected"
+    fi
+fi
+
+# 2. Inject firmware
+if [ -d "$SRC_FIRMWARE" ]; then
+    echo "--- Injecting firmware ---"
+    sudo mkdir -p "$ROOTFS/usr/lib/firmware"
+    sudo cp -a "$SRC_FIRMWARE"/* "$ROOTFS/usr/lib/firmware/" 2>/dev/null || true
+    echo "Firmware injected"
+fi
+
+# 3. Set console target and services
+echo "--- Configuring services ---"
+sudo systemd-nspawn -D "$ROOTFS" --pipe sh -c '
+    systemctl set-default multi-user.target
+    systemctl enable sshd
+    systemctl enable NetworkManager
+    systemctl enable systemd-resolved
+    systemctl enable systemd-timesyncd
+
+    # User setup
+    echo -e "root\nroot\n" | passwd root 2>/dev/null || true
+    echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+' || true
+
+# 4. Set hostname
+echo "begonia-alarm" | sudo tee "$ROOTFS/etc/hostname"
+
+# 5. Firstboot config
+if [ -f firstboot.sh ]; then
+    sudo mkdir -p "$ROOTFS/etc/systemd/system"
+    sudo cp firstboot.sh "$ROOTFS/root/"
+fi
+
+echo "=== Rootfs preparation complete ==="
