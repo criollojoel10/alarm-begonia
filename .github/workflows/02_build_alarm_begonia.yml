@@ -1,9 +1,3 @@
-#!/bin/bash
-# =============================================================================
-# build-arch-begonia.yml — Arch Linux ARM para xiaomi-begonia
-# =============================================================================
-# Toma boot.img + módulos + firmware de pmOS y construye imagen ALARM final
-# =============================================================================
 name: "📦 02 — Build Arch Linux ARM begonia"
 
 on:

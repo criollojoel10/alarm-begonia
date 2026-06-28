@@ -1,15 +1,3 @@
-#!/bin/bash
-# =============================================================================
-# build-pmos-base.yml — Extraer boot.img, módulos y firmware de pmOS
-# =============================================================================
-# Fase 0 del plan: congelar base postmarketOS funcional para begonia
-# Produce:
-#   - boot.img (kernel mainline 6.x + DTB + initramfs)
-#   - modules.tar.zst (/lib/modules/*)
-#   - firmware.tar.zst (/lib/firmware/* mediatek)
-#   - deviceinfo
-#   - cmdline efectivo
-# =============================================================================
 name: "🏗️ 01 — Build pmOS base (begonia)"
 
 on:
