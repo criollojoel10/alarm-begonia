@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       artifact_url:
-        description: "URL to pmos-begonia-console-cross-true artifact zip"
+        description: "Direct download URL (skip PAT)"
         default: ""
       source_run:
-        description: "Build # from begonia-postmarketos-build (auto-download)"
+        description: "Build # from begonia-postmarketos-build"
         default: "25"
 
 env:
@@ -36,9 +36,16 @@ jobs:
             curl -sL -o pmos.zip "${{ inputs.artifact_url }}"
           elif [ -n "${{ env.PAT }}" ]; then
             echo "Auto-downloading from run #${{ inputs.source_run }}..."
-            # Use gh (pre-installed on runner) with PAT
             echo "${{ env.PAT }}" | gh auth login --with-token 2>/dev/null || true
-            gh run download ${{ inputs.source_run }} \
+            # Resolve run number to database ID
+            echo "Resolving run number ${{ inputs.source_run }}..."
+            RUN_ID=$(gh run list --repo criollojoel10/begonia-postmarketos-build --limit 100 --json databaseId,number -q ".[] | select(.number == ${{ inputs.source_run }}) | .databaseId" | head -1)
+            if [ -z "$RUN_ID" ]; then
+              echo "Could not resolve run #${{ inputs.source_run }}, trying as database ID..."
+              RUN_ID="${{ inputs.source_run }}"
+            fi
+            echo "Run database ID: $RUN_ID"
+            gh run download "$RUN_ID" \
               --repo criollojoel10/begonia-postmarketos-build \
               --name pmos-begonia-console-cross-true \
               --dir pmos-raw 2>&1
