@@ -1,4 +1,4 @@
-name: "📦 02 — Build Arch Linux ARM begonia"
+name: "02 — Build Arch Linux ARM begonia"
 
 on:
   workflow_dispatch:
@@ -6,219 +6,172 @@ on:
       rootfs_size:
         description: "Rootfs image size (GB)"
         default: "8"
-      firmware_repo:
-        description: "Firmware repo URL"
-        default: "https://gitlab.postmarketos.org/mt6785-mainline/firmware.git"
-      firmware_branch:
-        description: "Firmware branch"
-        default: "begonia"
 
 env:
   ARCH_ROOTFS_URL: "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
-  DEVICE: "xiaomi-begonia"
   IMAGE_SIZE: "${{ inputs.rootfs_size }}G"
 
 jobs:
-  build_alarm:
-    name: "Build Arch Linux ARM for begonia"
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: "💾 Download pmOS base artifacts"
+      - name: Download pmOS base (from 01)
         uses: dawidd6/action-download-artifact@v9
         with:
-          repo: criollojoel10/alarm-begonia
-          name: pmos-base-begonia-console
+          name: pmos-base-begonia
           path: pmos-base
           workflow_conclusion: success
           check_artifacts: true
 
-      - name: "📦 Install dependencies"
+      - name: Verify pmOS base
+        run: |
+          ls -lh pmos-base/
+          file pmos-base/boot.img 2>/dev/null || echo "No boot.img!"
+
+      - name: Install deps
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             bsdtar cpio xz-utils zstd e2fsprogs \
             qemu-user-static binfmt-support \
-            android-sdk-platform-tools \
             --no-install-recommends
 
-      - name: "⬇️ Download Arch Linux ARM rootfs"
+      - name: Download Arch rootfs
         run: |
-          wget -q --show-progress "${{ env.ARCH_ROOTFS_URL }}" -O ArchLinuxARM-aarch64-latest.tar.gz
-          echo "Rootfs size: $(du -h ArchLinuxARM-aarch64-latest.tar.gz | cut -f1)"
+          wget -q --show-progress "${{ env.ARCH_ROOTFS_URL }}" -O arch-rootfs.tar.gz
+          ls -lh arch-rootfs.tar.gz
 
-      - name: "🖼️ Create rootfs image"
+      - name: Create and mount rootfs image
         run: |
-          truncate -s ${{ env.IMAGE_SIZE }} rootfs-archlinuxarm-begonia.img
-          mkfs.ext4 -F -L ArchRoot rootfs-archlinuxarm-begonia.img
+          truncate -s ${{ env.IMAGE_SIZE }} rootfs.img
+          mkfs.ext4 -F -L ArchRoot rootfs.img
           mkdir -p mnt
-          sudo mount rootfs-archlinuxarm-begonia.img mnt
-          echo "Mounted rootfs image"
+          sudo mount rootfs.img mnt
+          df -h mnt
 
-      - name: "📂 Extract Arch Linux ARM rootfs"
+      - name: Extract Arch rootfs
         run: |
-          sudo bsdtar -xpf ArchLinuxARM-aarch64-latest.tar.gz -C mnt
+          sudo bsdtar -xpf arch-rootfs.tar.gz -C mnt
           sudo sync
-          echo "Rootfs extracted"
 
-      - name: "🔧 Inject kernel modules from pmOS"
+      - name: Inject kernel modules
         run: |
-          if [ -d pmos-base/modules ]; then
-            KVER=$(ls pmos-base/modules/ | grep -v '.tar.gz' | head -1)
+          if [ -f pmos-base/modules.tar.gz ]; then
+            sudo mkdir -p mnt/usr/lib/modules
+            sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/modules
+            echo "Modules from tar:"
+            ls mnt/usr/lib/modules/
+          elif [ -d pmos-base/modules ]; then
+            KVER=$(ls pmos-base/modules/ | head -1)
             if [ -n "$KVER" ]; then
               sudo mkdir -p mnt/usr/lib/modules/$KVER
-              sudo cp -a pmos-base/modules/$KVER/* mnt/usr/lib/modules/$KVER/ 2>/dev/null || true
-              echo "Modules injected for kernel: $KVER"
+              sudo cp -a pmos-base/modules/$KVER/* mnt/usr/lib/modules/$KVER/
+              echo "Modules injected: $KVER"
             fi
-            # Also try tar.gz
-            for f in pmos-base/modules/*.tar.gz; do
-              [ -f "$f" ] || continue
-              sudo tar -xzf "$f" -C mnt/usr/lib/modules/ 2>/dev/null || true
-              echo "Extracted: $f"
-            done
           fi
 
-      - name: "🔧 Inject firmware"
+      - name: Inject firmware
         run: |
-          if [ -d pmos-base/firmware ]; then
+          if [ -f pmos-base/firmware.tar.gz ]; then
             sudo mkdir -p mnt/usr/lib/firmware
-            sudo cp -a pmos-base/firmware/* mnt/usr/lib/firmware/ 2>/dev/null || true
+            sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/firmware
             echo "Firmware injected"
           fi
 
-      - name: "🔧 Copy initramfs build files"
+      - name: Configure rootfs
         run: |
-          # Copy our initramfs source into rootfs
-          if [ -d initramfs ]; then
-            sudo mkdir -p mnt/tmp/initramfs-build
-            sudo cp -a initramfs/* mnt/tmp/initramfs-build/
-            echo "Initramfs source copied"
-          fi
-
-      - name: "⚙️ Configure Arch rootfs (via systemd-nspawn)"
-        run: |
-          # Set up networking for nspawn
-          sudo mkdir -p mnt/var/cache/pacman/pkg
-          sudo mkdir -p mnt/run/systemd/resolve
-
-          # Copy DNS config
+          # Bootstrapping
+          sudo mkdir -p mnt/etc
           echo "nameserver 1.1.1.1" | sudo tee mnt/etc/resolv.conf
           echo "nameserver 8.8.8.8" | sudo tee -a mnt/etc/resolv.conf
-
-          # Initial keyring
+          
+          # Keyring
           sudo systemd-nspawn -D mnt --pipe sh -c '
-            pacman-key --init 2>&1 | tail -3
-            pacman-key --populate archlinuxarm 2>&1 | tail -3
-          ' || true
+            pacman-key --init && pacman-key --populate archlinuxarm
+          ' 2>&1 | tail -5 || true
 
-          # Update system
-          sudo systemd-nspawn -D mnt --pipe sh -c '
-            pacman -Syu --noconfirm 2>&1 | tail -5
-          ' || true
-
-          # Install packages
-          sudo systemd-nspawn -D mnt --pipe sh -c '
-            pacman -S --noconfirm \
-              sudo vim nano git openssh rsync curl wget \
-              networkmanager iwd \
-              htop tmux \
-              base-devel \
-              2>&1 | tail -5
-          ' || true
-
-      - name: "⚙️ Configure services"
+      - name: Install packages
         run: |
-          # Enable multi-user.target
+          sudo systemd-nspawn -D mnt --pipe sh -c '
+            pacman -Syu --noconfirm --needed \
+              sudo vim nano git openssh rsync curl wget \
+              networkmanager \
+              htop tmux \
+              2>&1
+          ' 2>&1 | tail -10 || true
+
+      - name: Enable services
+        run: |
           sudo systemd-nspawn -D mnt --pipe sh -c '
             systemctl set-default multi-user.target
             systemctl enable sshd
             systemctl enable NetworkManager
             systemctl enable systemd-resolved
             systemctl enable systemd-timesyncd
-            systemctl disable systemd-networkd-wait-online 2>/dev/null || true
-          ' || true
-
-          # Setup user password (root)
-          sudo systemd-nspawn -D mnt --pipe sh -c '
-            echo -e "root\nalarm\nalarm\n\n\n\nY\n" | adduser alarm 2>/dev/null || true
+            useradd -m -s /bin/bash alarm 2>/dev/null || true
+            echo "alarm:alarm" | chpasswd
             usermod -aG wheel alarm 2>/dev/null || true
             sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers
             echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
-            echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
-          ' || true
+          ' 2>&1 | tail -5 || true
 
-      - name: "🏗️ Build Arch initramfs"
+      - name: Build Arch initramfs
         run: |
-          if [ -f initramfs/build-initramfs.sh ]; then
-            bash initramfs/build-initramfs.sh mnt
-          else
-            echo "No build-initramfs.sh found, using fallback minimal initramfs"
-            # Try to build minimal initramfs from our init script
-            if [ -f initramfs/init ]; then
-              mkdir -p initramfs-build
-              cp initramfs/init initramfs-build/
-              if [ -f initramfs/files.list ]; then
-                while IFS= read -r f; do
-                  [ -z "$f" ] && continue
-                  sudo cp -a mnt/$f initramfs-build/ 2>/dev/null || true
-                done < initramfs/files.list
-              fi
-              cd initramfs-build
-              find . -print0 | cpio --null --create --format=newc | gzip -9 > ../arch-initramfs.gz
-              cd ..
-              echo "Initramfs built: $(wc -c < arch-initramfs.gz) bytes"
+          if [ -f initramfs/init ]; then
+            mkdir -p initramfs-work
+            cp initramfs/init initramfs-work/init
+            
+            # Collect binaries from rootfs
+            if [ -f initramfs/files.list ]; then
+              while IFS= read -r f; do
+                [ -z "$f" ] && continue
+                sudo cp -aL "mnt/$f" initramfs-work/ 2>/dev/null || true
+              done < initramfs/files.list
             fi
+            
+            cd initramfs-work
+            find . -print0 | cpio --null --create --format=newc | gzip -9 > ../arch-initramfs.gz
+            cd ..
+            ls -lh arch-initramfs.gz
           fi
 
-      - name: "🏗️ Repack boot.img"
+      - name: Repack boot.img
         run: |
           if [ -x boot/repack-bootimg.sh ]; then
-            bash boot/repack-bootimg.sh pmos-base/images/boot.img arch-initramfs.gz boot-begonia-arch.img
+            bash boot/repack-bootimg.sh pmos-base/boot.img arch-initramfs.gz boot-begonia-arch.img
           else
-            # Fallback: use mkbootimg (Android)
-            if [ -f pmos-base/images/boot.img ]; then
-              # Try to extract and repack
-              cp pmos-base/images/boot.img boot-begonia-arch.img 2>/dev/null || true
-              echo "Using original pmOS boot.img as-is (initramfs unchanged)"
-            fi
+            # Use boot.img as-is if no repack
+            cp pmos-base/boot.img boot-begonia-arch.img 2>/dev/null || true
+            ls -lh boot-begonia-arch.img
           fi
 
-      - name: "📦 Prepare flash package"
+      - name: Prepare release
         run: |
-          mkdir -p flash-package
-          # Boot image
-          if [ -f boot-begonia-arch.img ]; then
-            cp boot-begonia-arch.img flash-package/
-          elif [ -f pmos-base/images/boot.img ]; then
-            cp pmos-base/images/boot.img flash-package/boot-begonia-arch.img
-          fi
-
-          # Rootfs (compress)
+          mkdir -p release
+          cp boot-begonia-arch.img release/ 2>/dev/null || true
+          
           sudo umount mnt 2>/dev/null || true
-          echo "Compressing rootfs..."
-          xz -9 -T 0 rootfs-archlinuxarm-begonia.img
-          mv rootfs-archlinuxarm-begonia.img.xz flash-package/
-          mv rootfs-archlinuxarm-begonia.img flash-package/ 2>/dev/null || true
-
-          # Flash script
+          xz -9 -T 0 -f rootfs.img
+          mv rootfs.img.xz release/rootfs-archlinuxarm-begonia.img.xz
+          
           if [ -f flash/flash-begonia-arch.sh ]; then
-            cp flash/flash-begonia-arch.sh flash-package/
+            cp flash/flash-begonia-arch.sh release/
           fi
-
-          # SHA256 checksums
-          cd flash-package
+          
+          cd release
           sha256sum * > SHA256SUMS.txt
           ls -lh
           cd ..
 
-      - name: "☁️ Release"
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
           name: "Arch Linux ARM for begonia (nightly)"
           prerelease: true
-          files: flash-package/*
+          files: release/*
           fail_on_unmatched_files: false
