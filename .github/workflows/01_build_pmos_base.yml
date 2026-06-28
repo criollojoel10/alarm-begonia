@@ -24,7 +24,10 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq simg2img e2fsprogs --no-install-recommends
+          sudo apt-get install -y -qq \
+            android-sdk-platform-tools-common \
+            e2fsprogs f2fs-tools \
+            --no-install-recommends
 
       - name: Download artifact
         run: |
@@ -33,20 +36,21 @@ jobs:
             curl -sL -o pmos.zip "${{ inputs.artifact_url }}"
           elif [ -n "${{ env.PAT }}" ]; then
             echo "Auto-downloading from run #${{ inputs.source_run }}..."
+            # Use gh (pre-installed on runner) with PAT
+            echo "${{ env.PAT }}" | gh auth login --with-token 2>/dev/null || true
             gh run download ${{ inputs.source_run }} \
               --repo criollojoel10/begonia-postmarketos-build \
               --name pmos-begonia-console-cross-true \
-              --dir pmos-raw
-            # Repack to single zip
+              --dir pmos-raw 2>&1
             cd pmos-raw && zip -r ../pmos.zip . && cd ..
           else
             echo "ERROR: provide artifact_url input or set PMOS_PAT secret"
             echo ""
-            echo "How to get the URL:"
+            echo "How to get the artifact URL:"
             echo "1. Go to https://github.com/criollojoel10/begonia-postmarketos-build/actions/runs/28313265908"
             echo "2. Download 'pmos-begonia-console-cross-true' manually"
-            echo "3. Upload zip somewhere public and pass URL, OR"
-            echo "4. Create PAT with repo scope and set as PMOS_PAT secret"
+            echo "3. Upload to any public file host and pass URL, OR"
+            echo "4. Create a PAT with 'repo' scope, save as repo secret PMOS_PAT"
             exit 1
           fi
           ls -lh pmos.zip
@@ -54,123 +58,60 @@ jobs:
 
       - name: Extract boot.img
         run: |
-          mkdir -p pmos
+          mkdir -p pmos out
           unzip -o pmos.zip -d pmos/
-          
-          find pmos -name "*.img" -o -name "boot*" -o -name "vmlinuz" -o -name "initramfs*" | sort
-          
-          # Extract boot.img
           BOOT=$(find pmos -name "boot.img" | head -1)
           if [ -n "$BOOT" ]; then
-            mkdir -p out
             cp "$BOOT" out/boot.img
-            echo "boot.img: $(ls -lh out/boot.img | awk '{print $5}')"
+            echo "boot.img: $(ls -lh out/boot.img)"
           fi
-          
-          # Extract vmlinuz
           VMLINUZ=$(find pmos -name "vmlinuz" | head -1)
           if [ -n "$VMLINUZ" ]; then
             cp "$VMLINUZ" out/vmlinuz
           fi
 
-      - name: Mount system image and extract modules + firmware
+      - name: Mount and extract modules + firmware
         run: |
           SYSIMG=$(find pmos -name "xiaomi-begonia.img" | head -1)
           if [ -z "$SYSIMG" ]; then
-            echo "No system image found in artifact"
-            echo "Files found:"
+            echo "ERROR: no system image found"
             find pmos -type f -exec ls -lh {} \;
             exit 1
           fi
-          
-          ls -lh "$SYSIMG"
+          echo "System image: $(ls -lh $SYSIMG)"
           
           # Convert sparse to raw
-          if file "$SYSIMG" | grep -q "sparse"; then
-            echo "Converting sparse image..."
-            simg2img "$SYSIMG" system-raw.img
-          else
-            cp "$SYSIMG" system-raw.img
-          fi
+          file "$SYSIMG" | grep -q "sparse" && simg2img "$SYSIMG" system-raw.img || cp "$SYSIMG" system-raw.img
           ls -lh system-raw.img
           
-          # Mount partitions
-          for off in 0 1048576 2097152 3145728 4194304 5242880 6291456 7340032; do
-            echo "Trying mount offset=$off..."
+          # Use kpartx to find partitions
+          LOOP=$(sudo losetup --find --show -r system-raw.img)
+          echo "Loop: $LOOP"
+          sudo kpartx -av "$LOOP" 2>&1 || true
+          
+          # Mount each partition
+          for part in /dev/mapper/loop*p*; do
+            [ -b "$part" ] || continue
+            echo "Trying $part..."
             mkdir -p mnt
-            if mount -o loop,ro,offset=$off system-raw.img mnt 2>/dev/null; then
-              echo "Mounted at offset $off"
-              if mountpoint -q mnt; then
-                ls mnt/
-                if [ -d mnt/lib/modules ] || [ -d mnt/system/lib/modules ]; then
-                  echo "Found modules!"
-                  break
-                fi
-              fi
-              umount mnt 2>/dev/null || true
+            sudo mount -r "$part" mnt 2>/dev/null || continue
+            
+            if [ -d mnt/lib/modules ]; then
+              KVER=$(ls mnt/lib/modules/ | head -1)
+              echo "Found modules: $KVER"
+              sudo tar -czf out/modules.tar.gz -C mnt/lib modules
+              ls -lh out/modules.tar.gz
             fi
+            if [ -d mnt/lib/firmware ]; then
+              sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
+              ls -lh out/firmware.tar.gz
+            fi
+            sudo umount mnt
+            break
           done
           
-          # If offset scans didn't work, try kpartx
-          if ! mountpoint -q mnt; then
-            echo "Trying kpartx..."
-            LOOP=$(sudo losetup --find --show -r system-raw.img)
-            echo "Loop: $LOOP"
-            sudo partx -a "$LOOP" 2>/dev/null || true
-            sudo fdisk -l "$LOOP" 2>/dev/null || true
-            
-            # Try each partition
-            for part in /dev/loop*p*; do
-              [ -b "$part" ] || continue
-              echo "Trying $part..."
-              if mount -r "$part" mnt 2>/dev/null; then
-                echo "Mounted $part"
-                break
-              fi
-            done
-          fi
-          
-          # Extract if mounted
-          if mountpoint -q mnt; then
-            echo "Extracting from mounted image..."
-            ls -la mnt/
-            ls -la mnt/lib/ 2>/dev/null || echo "No /lib"
-            
-            # Try standard paths
-            MODDIR=""
-            for d in mnt/lib/modules mnt/usr/lib/modules; do
-              if [ -d "$d" ]; then
-                MODDIR="$d"
-                break
-              fi
-            done
-            
-            if [ -n "$MODDIR" ]; then
-              KVER=$(ls "$MODDIR" | head -1)
-              echo "Kernel version: $KVER"
-              mkdir -p out/modules
-              tar -czf out/modules.tar.gz -C "$(dirname $MODDIR)" "$(basename $MODDIR)"
-              echo "Modules: $(ls -lh out/modules.tar.gz)"
-            fi
-            
-            # Firmware
-            for d in mnt/lib/firmware mnt/usr/lib/firmware; do
-              if [ -d "$d" ]; then
-                tar -czf out/firmware.tar.gz -C "$(dirname $d)" "$(basename $d)"
-                echo "Firmware: $(ls -lh out/firmware.tar.gz)"
-                break
-              fi
-            fi
-            
-            umount mnt
-          else
-            echo "WARNING: Could not mount system image"
-            echo "The artifact will be preserved in raw format for manual extraction"
-            mkdir -p out
-            cp system-raw.img out/ 2>/dev/null
-          fi
-          
-          # Clean up
+          # Cleanup
+          sudo kpartx -d "$LOOP" 2>/dev/null || true
           sudo losetup -d "$LOOP" 2>/dev/null || true
           
           echo ""
