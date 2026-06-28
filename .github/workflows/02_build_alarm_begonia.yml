@@ -24,8 +24,11 @@ jobs:
         with:
           name: pmos-base-begonia
           path: pmos-base
+          workflow: 01_build_pmos_base.yml
           workflow_conclusion: success
+          workflow_search: true
           check_artifacts: true
+          repo: criollojoel10/alarm-begonia
 
       - name: Verify pmOS base
         run: |
