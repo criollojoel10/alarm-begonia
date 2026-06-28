@@ -185,7 +185,8 @@ jobs:
 
             ### Install
             ```
-            unxz rootfs-archlinuxarm-begonia-console.img.xz
+            # Device must be in fastboot mode first
+            fastboot format:ext4 userdata
             fastboot flash boot boot-begonia-arch.img
             fastboot flash userdata rootfs-archlinuxarm-begonia-console.img
             fastboot reboot
