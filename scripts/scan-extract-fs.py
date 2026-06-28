@@ -18,8 +18,8 @@ with open(raw_path, 'rb') as f:
         if check_off + 58 > raw_size:
             break
         f.seek(check_off)
-        data = f.read(128)
-        if len(data) < 58:
+        data = f.read(200)
+        if len(data) < 136:
             continue
 
         magic = struct.unpack_from('<H', data, 56)[0]
