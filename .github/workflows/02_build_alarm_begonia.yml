@@ -110,10 +110,11 @@ jobs:
           sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
           sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/' Makefile
 
-          # Build using the driver's OWN Makefile (DO NOT use -C kernel M=module)
-          # Realtek drivers have their own build system that internally calls the kernel
+          # Build using the driver's OWN Makefile.
+          # KBUILD_MODPOST_WARN=1: Module.symvers is empty (only modules_prepared, not full kernel build),
+          # so modpost would error on every external symbol. These are standard exports resolved at load time.
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            KSRC="$KSRC" 2>&1 | tail -30
+            KSRC="$KSRC" KBUILD_MODPOST_WARN=1 2>&1 | tail -30
 
           # Verify the module was built
           ls -lh 8192eu.ko 2>/dev/null || { echo "BUILD FAILED"; ls *.ko; false; }
