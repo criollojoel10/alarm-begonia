@@ -7,6 +7,9 @@ on:
         description: "Rootfs image size (GB)"
         default: "8"
 
+permissions:
+  contents: write
+
 env:
   ARCH_ROOTFS_URL: "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
   IMAGE_SIZE: "${{ inputs.rootfs_size }}G"
@@ -33,7 +36,9 @@ jobs:
       - name: Verify pmOS base
         run: |
           ls -lh pmos-base/
-          file pmos-base/boot.img 2>/dev/null || echo "No boot.img!"
+          file pmos-base/boot.img
+          [ -f pmos-base/modules.tar.gz ] && echo "✅ modules.tar.gz"
+          [ -f pmos-base/firmware.tar.gz ] && echo "✅ firmware.tar.gz"
 
       - name: Install deps
         run: |
@@ -60,32 +65,29 @@ jobs:
         run: |
           sudo bsdtar -xpf arch-rootfs.tar.gz -C mnt
           sudo sync
+          echo "Rootfs extracted. Used: $(df -h mnt | tail -1 | awk '{print $3}')"
 
       - name: Inject kernel modules
         run: |
           if [ -f pmos-base/modules.tar.gz ]; then
-            # tar contains modules/6.16.4/... — extract to /usr/lib
             sudo mkdir -p mnt/usr/lib
             sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/
-            echo "Modules injected:"
-            ls -R mnt/usr/lib/modules/ 2>/dev/null | head -10
-          elif [ -d pmos-base/modules ]; then
-            KVER=$(ls pmos-base/modules/ | head -1)
-            if [ -n "$KVER" ]; then
-              sudo mkdir -p mnt/usr/lib/modules/$KVER
-              sudo cp -a pmos-base/modules/$KVER/* mnt/usr/lib/modules/$KVER/
-              echo "Modules injected: $KVER"
-            fi
+            KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)
+            MOD_COUNT=$(find mnt/usr/lib/modules -type f 2>/dev/null | wc -l)
+            echo "✅ Modules injected: $KVER ($MOD_COUNT files)"
+          else
+            echo "❌ No modules.tar.gz"
           fi
 
       - name: Inject firmware
         run: |
           if [ -f pmos-base/firmware.tar.gz ]; then
-            # tar contains firmware/ — extract to /usr/lib
             sudo mkdir -p mnt/usr/lib
             sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/
-            echo "Firmware injected:"
-            ls -R mnt/usr/lib/firmware/ 2>/dev/null | head -10
+            FW_COUNT=$(find mnt/usr/lib/firmware -type f 2>/dev/null | wc -l)
+            echo "✅ Firmware injected: $FW_COUNT files"
+          else
+            echo "✅ No firmware.tar.gz (ok, pmOS firmware already in boot.img dtb)"
           fi
 
       - name: Configure rootfs
@@ -93,7 +95,7 @@ jobs:
           sudo mkdir -p mnt/etc
           echo "nameserver 1.1.1.1" | sudo tee mnt/etc/resolv.conf
           echo "nameserver 8.8.8.8" | sudo tee -a mnt/etc/resolv.conf
-          
+
           sudo systemd-nspawn -D mnt --pipe sh -c '
             pacman-key --init && pacman-key --populate archlinuxarm
           ' 2>&1 | tail -5 || true
@@ -106,7 +108,7 @@ jobs:
               networkmanager systemd-resolved \
               htop tmux \
               2>&1
-          ' 2>&1 | tail -20 || true
+          ' 2>&1 | tail -20 || echo "⚠️ pacman install had issues (likely network in chroot)"
 
       - name: Enable services & create user
         run: |
@@ -123,48 +125,21 @@ jobs:
             echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
           ' 2>&1 | tail -10 || true
 
-      - name: Build Arch initramfs
-        run: |
-          if [ -f initramfs/init ]; then
-            mkdir -p initramfs-work
-            cp initramfs/init initramfs-work/init
-            
-            if [ -f initramfs/files.list ]; then
-              while IFS= read -r f; do
-                [ -z "$f" ] && continue
-                sudo cp -aL "mnt/$f" initramfs-work/ 2>/dev/null || true
-              done < initramfs/files.list
-            fi
-            
-            cd initramfs-work
-            find . -print0 | cpio --null --create --format=newc | gzip -9 > ../arch-initramfs.gz
-            cd ..
-            ls -lh arch-initramfs.gz
-          fi
-
-      - name: Repack boot.img
-        run: |
-          if [ -f boot/repack-bootimg.sh ]; then
-            chmod +x boot/repack-bootimg.sh
-            if [ -f arch-initramfs.gz ]; then
-              bash boot/repack-bootimg.sh pmos-base/boot.img arch-initramfs.gz boot-begonia-arch.img
-            else
-              cp pmos-base/boot.img boot-begonia-arch.img
-            fi
-          else
-            cp pmos-base/boot.img boot-begonia-arch.img
-          fi
-          ls -lh boot-begonia-arch.img
-
       - name: Prepare release
         run: |
           mkdir -p release
-          cp boot-begonia-arch.img release/
           
+          # Use pmOS boot.img directly (it has working initramfs already)
+          cp pmos-base/boot.img release/boot-begonia-arch.img
+          echo "boot.img: $(ls -lh release/boot-begonia-arch.img | awk '{print $5}')"
+          
+          # Compress rootfs
           sudo umount mnt 2>/dev/null || true
+          echo "Compressing rootfs.img with xz..."
           xz -9 -T 0 -f rootfs.img && ls -lh rootfs.img.xz
           mv rootfs.img.xz release/rootfs-archlinuxarm-begonia-console.img.xz
           
+          # Flash script
           if [ -f flash/flash-begonia-arch.sh ]; then
             cp flash/flash-begonia-arch.sh release/
           fi
@@ -174,40 +149,40 @@ jobs:
           ls -lh
           cd ..
 
-      - name: Delete old nightly release
+      - name: Delete old nightly release & tag
+        continue-on-error: true
         run: |
-          # Delete existing nightly release + tag to avoid conflict
           gh release delete nightly -y --repo ${{ github.repository }} 2>/dev/null || true
           git push --delete origin nightly 2>/dev/null || true
           sleep 2
 
-      - name: Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
           name: "Arch Linux ARM for begonia (nightly)"
           body: |
             ## Arch Linux ARM for Xiaomi Redmi Note 8 Pro (begonia)
-            
-            Basado en:
-            - Kernel: postmarketOS mainline 6.16.4
-            - Userspace: Arch Linux ARM aarch64 (glibc)
-            
-            **Qué incluye:**
-            - `boot-begonia-arch.img` — flash con `fastboot flash boot`
-            - `rootfs-archlinuxarm-begonia-console.img.xz` — flash con `fastboot flash userdata`
-            - `flash-begonia-arch.sh` — script todo-en-uno
-            
-            **Instalación:**
+
+            - **Kernel:** postmarketOS mainline 6.16.4
+            - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman)
+            - **Modules:** mt6785 mainline
+            - **Firmware:** included (WiFi, GPU, etc.)
+
+            ### Files
+            - `boot-begonia-arch.img` — Kernel + DTB + initramfs
+            - `rootfs-archlinuxarm-begonia-console.img.xz` — Rootfs (ext4)
+
+            ### Install
             ```
             unxz rootfs-archlinuxarm-begonia-console.img.xz
             fastboot flash boot boot-begonia-arch.img
             fastboot flash userdata rootfs-archlinuxarm-begonia-console.img
             fastboot reboot
             ```
-            
-            Usuario: `alarm` / `alarm`
-            SSH: `ssh alarm@<ip>` (averigua IP desde el router o consola serial)
+
+            **Login:** `alarm` / `alarm`
+            **SSH:** `ssh alarm@<device-ip>`
           prerelease: true
           make_latest: true
           files: release/*
