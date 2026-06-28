@@ -63,22 +63,31 @@ jobs:
           ls -lh pmos.zip
           unzip -l pmos.zip | head -15
 
-      - name: Extract boot.img
+      - name: Extract files
         run: |
           mkdir -p pmos out
           unzip -o pmos.zip -d pmos/
-          BOOT=$(find pmos -name "boot.img" | head -1)
-          if [ -n "$BOOT" ]; then
-            cp "$BOOT" out/boot.img
-            echo "boot.img: $(ls -lh out/boot.img)"
+          EXDIR=$(find pmos -type d -name "export" | head -1)
+          [ -z "$EXDIR" ] && EXDIR="pmos"
+          echo "Source: $EXDIR"
+          if [ -f "$EXDIR/boot.img" ]; then
+            cp "$EXDIR/boot.img" out/boot.img
+            file out/boot.img
           fi
-          VMLINUZ=$(find pmos -name "vmlinuz" | head -1)
-          if [ -n "$VMLINUZ" ]; then
-            cp "$VMLINUZ" out/vmlinuz
+          if [ -f "$EXDIR/vmlinuz" ]; then
+            cp "$EXDIR/vmlinuz" out/vmlinuz
           fi
+          for f in "$EXDIR/initramfs" "$EXDIR/initramfs.gz" "$EXDIR/initrd.img"; do
+            if [ -f "$f" ]; then
+              cp "$f" out/initramfs
+              break
+            fi
+          done
+          echo "out/: $(ls -lh out/)"
 
       - name: Mount and extract modules + firmware
         run: |
+          # The xiaomi-begonia.img is a raw ext4 filesystem image (no partitions)
           SYSIMG=$(find pmos -name "xiaomi-begonia.img" | head -1)
           if [ -z "$SYSIMG" ]; then
             echo "ERROR: no system image found"
@@ -87,40 +96,42 @@ jobs:
           fi
           echo "System image: $(ls -lh $SYSIMG)"
           
-          # Convert sparse to raw
-          file "$SYSIMG" | grep -q "sparse" && simg2img "$SYSIMG" system-raw.img || cp "$SYSIMG" system-raw.img
-          ls -lh system-raw.img
+          # Convert sparse to raw if needed
+          if file "$SYSIMG" | grep -q "sparse"; then
+            echo "Converting sparse image..."
+            simg2img "$SYSIMG" system-raw.img
+            ls -lh system-raw.img
+          else
+            cp "$SYSIMG" system-raw.img
+          fi
           
-          # Use kpartx to find partitions
-          LOOP=$(sudo losetup --find --show -r system-raw.img)
-          echo "Loop: $LOOP"
-          sudo kpartx -av "$LOOP" 2>&1 || true
+          # Mount directly (no kpartx - this is a filesystem image, not a disk)
+          mkdir -p mnt
+          sudo mount -o loop,ro system-raw.img mnt
           
-          # Mount each partition
-          for part in /dev/mapper/loop*p*; do
-            [ -b "$part" ] || continue
-            echo "Trying $part..."
-            mkdir -p mnt
-            sudo mount -r "$part" mnt 2>/dev/null || continue
-            
-            if [ -d mnt/lib/modules ]; then
-              KVER=$(ls mnt/lib/modules/ | head -1)
-              echo "Found modules: $KVER"
-              sudo tar -czf out/modules.tar.gz -C mnt/lib modules
-              ls -lh out/modules.tar.gz
-            fi
-            if [ -d mnt/lib/firmware ]; then
-              sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
-              ls -lh out/firmware.tar.gz
-            fi
-            sudo umount mnt
-            break
-          done
+          echo "=== Mounted at mnt/ ==="
+          ls mnt/
           
-          # Cleanup
-          sudo kpartx -d "$LOOP" 2>/dev/null || true
-          sudo losetup -d "$LOOP" 2>/dev/null || true
+          # Extract modules
+          if [ -d mnt/lib/modules ]; then
+            KVER=$(ls mnt/lib/modules/ | head -1)
+            echo "Found kernel modules: $KVER"
+            sudo tar -czf out/modules.tar.gz -C mnt/lib modules
+            ls -lh out/modules.tar.gz
+          else
+            echo "No modules found in mnt/lib/modules"
+            ls mnt/lib/ 2>/dev/null || echo "lib/ not found"
+          fi
           
+          # Extract firmware
+          if [ -d mnt/lib/firmware ]; then
+            sudo tar -czf out/firmware.tar.gz -C mnt/lib firmware
+            ls -lh out/firmware.tar.gz
+          else
+            echo "No firmware found"
+          fi
+          
+          sudo umount mnt
           echo ""
           echo "=== Final output ==="
           ls -lh out/
