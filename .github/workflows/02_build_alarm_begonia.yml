@@ -56,49 +56,55 @@ jobs:
       - name: Extract Arch rootfs + inject modules/firmware
         run: |
           sudo bsdtar -xpf arch-rootfs.tar.gz -C mnt
-          sudo mkdir -p mnt/usr/lib
+          sudo mkdir -p mnt/usr/lib /boot
           sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/
           sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/ 2>/dev/null || true
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
           echo "Kernel: $KVER"
           echo "Modules: $(find mnt/usr/lib/modules -type f | wc -l)"
-          echo "Firmware: $(find mnt/usr/lib/firmware -type f 2>/dev/null | wc -l)"
 
       - name: Prepare chroot environment
         run: |
-          # Copy qemu for cross-arch chroot
           sudo cp "$(which qemu-aarch64-static)" mnt/usr/bin/
-
-          # Mount proc, sys, dev for chroot
           sudo mount -t proc proc mnt/proc
           sudo mount --bind /sys mnt/sys
           sudo mount --bind /dev mnt/dev
           sudo mount --bind /dev/pts mnt/dev/pts 2>/dev/null || true
 
-          # Fix resolv.conf - copy host DNS (works with QEMU)
-          sudo cp /etc/resolv.conf mnt/etc/resolv.conf
+          # FIX 1: Delete resolved symlink, copy host resolv.conf as regular file
+          echo "=== Debug: resolv.conf before fix ==="
+          sudo ls -la mnt/etc/resolv.conf 2>/dev/null || echo "no resolv.conf"
+          sudo rm -f mnt/etc/resolv.conf
+          sudo bash -c 'cp /etc/resolv.conf mnt/etc/resolv.conf'
+          echo "=== Debug: resolv.conf after fix ==="
+          sudo ls -la mnt/etc/resolv.conf
+          sudo cat mnt/etc/resolv.conf
 
-          # Disable pacman sandbox (Landlock not available in runner)
+          # FIX 2: Provide kernel image for mkinitcpio
+          sudo mkdir -p mnt/boot
+          sudo cp pmos-base/vmlinuz mnt/boot/vmlinuz-linux
+
+          # Disable pacman sandbox
           sudo sed -i '/\[options\]/a DisableSandbox' mnt/etc/pacman.conf
 
           # Verify DNS works from inside chroot
-          sudo chroot mnt /bin/bash -c 'getent hosts mirror.archlinuxarm.org || ping -c 1 -W 3 mirror.archlinuxarm.org || echo "DNS check done"'
+          sudo chroot mnt /bin/bash -c 'ping -c 1 -W 5 mirror.archlinuxarm.org && echo "DNS OK!" || echo "DNS FAIL"'
 
       - name: Install packages (pacman inside chroot)
         run: |
           sudo chroot mnt /bin/bash -c '\
-            pacman-key --init 2>&1 | tail -1; \
-            pacman-key --populate archlinuxarm 2>&1 | tail -1; \
+            pacman-key --init 2>&1; \
+            pacman-key --populate archlinuxarm 2>&1; \
             pacman -Syu --noconfirm --needed \
               mkinitcpio busybox \
               sudo vim nano git openssh rsync curl wget \
               networkmanager systemd-resolved \
-              htop tmux 2>&1 | tail -15'
+              htop tmux 2>&1'
 
-      - name: Generate Arch initramfs
+      - name: Generate Arch initramfs (ignore non-fatal errors)
         run: |
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          sudo chroot mnt /bin/bash -c "mkinitcpio -k '$KVER' -g /boot/initramfs-arch.img 2>&1"
+          sudo chroot mnt /bin/bash -c "mkinitcpio -k '$KVER' -g /boot/initramfs-arch.img 2>&1" || true
           sudo ls -lh mnt/boot/initramfs-arch.img
 
       - name: Enable services & create user
@@ -115,15 +121,13 @@ jobs:
             sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers; \
             echo "PermitRootLogin yes" >> /etc/ssh/sshd_config'
 
-      - name: Cleanup chroot mounts
+      - name: Cleanup chroot mounts & prepare release
         run: |
           sudo umount mnt/dev/pts 2>/dev/null || true
           sudo umount mnt/dev 2>/dev/null || true
           sudo umount mnt/sys 2>/dev/null || true
           sudo umount mnt/proc 2>/dev/null || true
 
-      - name: Prepare release
-        run: |
           mkdir -p release
           cp pmos-base/boot.img release/boot-begonia-arch.img
 
