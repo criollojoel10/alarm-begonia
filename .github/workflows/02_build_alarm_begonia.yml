@@ -98,7 +98,7 @@ jobs:
             pacman -Syu --noconfirm --needed \
               mkinitcpio busybox \
               sudo vim nano git openssh rsync curl wget \
-              networkmanager systemd-resolved \
+              networkmanager \
               htop tmux 2>&1'
 
       - name: Generate Arch initramfs (ignore non-fatal errors)
