@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            android-sdk-platform-tools-common \
+            android-sdk-libsparse-utils \
             e2fsprogs f2fs-tools \
             --no-install-recommends
 
