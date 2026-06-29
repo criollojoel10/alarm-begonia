@@ -159,22 +159,18 @@ jobs:
 
       - name: Install packages (pacman inside chroot)
         run: |
-          sudo chroot mnt /bin/bash -c '\
-            pacman-key --init 2>&1; \
-            pacman-key --populate archlinuxarm 2>&1; \
+          sudo chroot mnt /bin/bash -c '
+            pacman-key --init 2>&1
+            pacman-key --populate archlinuxarm 2>&1
             pacman -Syu --noconfirm --needed \
               mkinitcpio busybox \
               sudo vim nano git openssh rsync curl wget \
               networkmanager \
-              htop tmux 2>&1'
+              htop tmux 2>&1
+          '
 
       # ============================================================
       # FIX #2: /etc/fstab — prevents pmOS initramfs boot partition wait
-      # The pmOS initramfs (which may be in boot.img as fallback) checks
-      # /etc/fstab after mounting root. If fstab is empty, it calls
-      # wait_boot_partition() which waits 30s for label "pmOS_boot"
-      # that doesn't exist, then fail_halt_boot.
-      # With fstab present, the check is skipped entirely.
       # ============================================================
       - name: Create /etc/fstab (prevents boot partition wait)
         run: |
@@ -189,37 +185,58 @@ jobs:
 
       # ============================================================
       # FIX #3: Generate Arch initramfs + inject into boot.img
-      # The old workflow ran mkinitcpio but never used its output.
-      # Now we inject it as the boot.img ramdisk, replacing the
-      # 36MB pmOS initramfs that has boot partition logic.
-      # Uses mkinitcpio with HOOKS without autodetect (since we
-      # build inside qemu; all storage is built-in to kernel anyway).
+      #
+      # Key changes from build #19:
+      # 1. mkinitcpio ran but its output was never used — it generated for
+      #    kernel 7.1.1 (Arch default preset), not our 6.16.4 (pmOS).
+      #    Now we explicitly pass KVER=6.16.4 via -k flag.
+      # 2. Shell quoting was broken: '\''$KVER'\'' in YAML double-quoted
+      #    string caused "unexpected EOF". Fixed: single quotes in chroot -c.
+      # 3. HOOKS changed from autodetect to (base udev modconf block
+      #    filesystems keyboard fsck) so qemu chroot doesn't pick wrong hw.
+      # 4. /etc/fstab created as safety net for pmOS initramfs fallback.
+      # 5. NEW: repack-bootimg.py injects mkinitcpio output as boot.img ramdisk.
       # ============================================================
+
+      - name: Get kernel version for mkinitcpio
+        run: |
+          KVER=$(ls mnt/usr/lib/modules/ | grep -v "^\.\|extra\|arch" | head -1)
+          echo "KVER=$KVER" | tee -a $GITHUB_ENV
+          echo "Modules available: $(ls mnt/usr/lib/modules/)"
+
+      - name: Configure mkinitcpio hooks (no autodetect)
+        run: |
+          # Remove autodetect — detects qemu hw in CI, not real device.
+          # ext4/mmc_block/mtk-sd are built-in to pmOS kernel.
+          sudo chroot mnt /bin/bash -c "
+            sed -i 's/^HOOKS=.*/HOOKS=(base udev modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
+            grep ^HOOKS /etc/mkinitcpio.conf
+          "
 
       - name: Generate Arch initramfs (mkinitcpio)
         run: |
-          KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          echo "Generating mkinitcpio initramfs for kernel: $KVER"
+          echo "Building for kernel: $KVER"
+          sudo mkdir -p mnt/boot
 
-          # Remove autodetect from hooks — we build inside qemu so
-          # autodetect would only capture qemu hw, not our real device.
-          # All storage (ext4, mmc_block, mtk-sd) is built into kernel.
-          sudo chroot mnt /bin/bash -c '
-            sed -i "s/^HOOKS=.*/HOOKS=(base udev modconf block filesystems keyboard fsck)/" /etc/mkinitcpio.conf
-            echo "HOOKS: $(grep ^HOOKS /etc/mkinitcpio.conf)"
-          '
+          # Clean command — no quoting issues
+          sudo chroot mnt /bin/bash -c "mkinitcpio -k $KVER -g /boot/initramfs-arch.img 2>&1" || RC=$?
 
-          # Generate initramfs (|| true because mkinitcpio may warn about
-          # missing firmware but still succeed)
-          sudo chroot mnt /bin/bash \
-            -c "mkinitcpio -k '\''$(ls /usr/lib/modules/ | head -1)'\'' -g /boot/initramfs-arch.img 2>&1" \
-            || echo "⚠️ mkinitcpio returned $? — checking output..."
+          if [ -n "${RC:-}" ] && [ "$RC" -ne 0 ]; then
+            echo "⚠️ mkinitcpio returned $RC — checking if partial output exists..."
+          fi
 
-          sudo ls -lh mnt/boot/initramfs-arch.img 2>/dev/null
+          echo "=== Initramfs check ==="
+          if [ -f mnt/boot/initramfs-arch.img ]; then
+            ls -lh mnt/boot/initramfs-arch.img
+            file mnt/boot/initramfs-arch.img
+          else
+            echo "❌ initramfs NOT generated"
+            ls -la mnt/boot/ 2>/dev/null || echo "no /boot"
+          fi
 
       - name: Inject initramfs into boot.img
         run: |
-          if sudo test -f mnt/boot/initramfs-arch.img; then
+          if [ -f mnt/boot/initramfs-arch.img ] && [ -s mnt/boot/initramfs-arch.img ]; then
             echo "✅ mkinitcpio initramfs found — injecting into boot.img"
 
             # Copy out of chroot
@@ -234,24 +251,26 @@ jobs:
 
             echo "✅ boot.img now carries Arch mkinitcpio initramfs"
           else
-            echo "⚠️ mkinitcpio initramfs NOT found — using pmOS initramfs fallback"
-            echo "   (boot partition wait is prevented by /etc/fstab in rootfs)"
+            echo "⚠️ mkinitcpio initramfs NOT generated — falling back to pmOS initramfs"
+            echo "   Boot partition wait is prevented by /etc/fstab in rootfs"
             cp pmos-base/boot.img boot-begonia-arch.img
           fi
           ls -lh boot-begonia-arch.img
+          file boot-begonia-arch.img
 
       - name: Enable services & create user
         run: |
-          sudo chroot mnt /bin/bash -c '\
-            systemctl set-default multi-user.target; \
-            systemctl enable sshd; \
-            systemctl enable NetworkManager; \
-            systemctl enable systemd-timesyncd; \
-            useradd -m -s /bin/bash alarm 2>/dev/null || true; \
-            echo "alarm:alarm" | chpasswd; \
-            usermod -aG wheel alarm 2>/dev/null || true; \
-            sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers; \
-            echo "PermitRootLogin yes" >> /etc/ssh/sshd_config'
+          sudo chroot mnt /bin/bash -c '
+            systemctl set-default multi-user.target
+            systemctl enable sshd
+            systemctl enable NetworkManager
+            systemctl enable systemd-timesyncd
+            useradd -m -s /bin/bash alarm 2>/dev/null || true
+            echo "alarm:alarm" | chpasswd
+            usermod -aG wheel alarm 2>/dev/null || true
+            sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers
+            echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+          '
 
       - name: Cleanup chroot mounts & prepare release
         run: |
