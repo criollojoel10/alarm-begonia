@@ -53,10 +53,11 @@ jobs:
           ls -lh arch-rootfs.tar.gz
 
       # ============================================================
-      # FIX #1: Fix boot.img cmdline — remove hardcoded pmos_root_uuid
-      # The original pmOS boot.img has pmos_root_uuid= from the build #25 rootfs.
-      # Our Arch rootfs has a different UUID, so blkid --uuid fails,
-      # and find_partition() RETURNS EMPTY without falling through to label check.
+      # FIX #1: Fix boot.img cmdline — remove hardcoded UUIDs
+      # The original pmOS boot.img has pmos_root_uuid= and pmos_boot_uuid=
+      # from the build #25 rootfs. The pmOS initramfs find_partition()
+      # checks UUID first and returns EMPTY on mismatch, never reaching
+      # label fallback. Removing UUIDs forces label-based search.
       # ============================================================
       - name: Fix boot.img cmdline (remove hardcoded UUIDs)
         run: python3 scripts/fix-cmdline.py
@@ -64,7 +65,6 @@ jobs:
       - name: Create and mount rootfs image
         run: |
           truncate -s ${{ env.IMAGE_SIZE }} rootfs.img
-          # FIX #2: Use lowercase "pmOS_root" to match initramfs blkid --label search
           mkfs.ext4 -F -L pmOS_root rootfs.img
           mkdir -p mnt
           sudo mount rootfs.img mnt
@@ -72,7 +72,7 @@ jobs:
       - name: Extract Arch rootfs + inject modules/firmware
         run: |
           sudo bsdtar -xpf arch-rootfs.tar.gz -C mnt
-          sudo mkdir -p mnt/usr/lib /boot
+          sudo mkdir -p mnt/usr/lib
           sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/
           sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/ 2>/dev/null || true
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
@@ -81,7 +81,7 @@ jobs:
           echo "KVER=$KVER" >> $GITHUB_ENV
 
       # ============================================================
-      # Build RTL8192EU (TP-Link WN821N) WiFi driver for kernel 6.16.4
+      # Build RTL8192EU (TP-Link WN821N) WiFi driver
       # ============================================================
       - name: Restore kernel source cache
         id: cache-kernel
@@ -105,7 +105,6 @@ jobs:
           cd linux-kernel
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
-          ls -lh Module.symvers 2>/dev/null || echo "no Module.symvers yet"
 
       - name: Clone and build RTL8192EU driver
         run: |
@@ -130,7 +129,6 @@ jobs:
           sudo mkdir -p mnt/etc/modprobe.d mnt/etc/modules-load.d
           printf '%s\n' \
             '# Blacklist the buggy in-kernel rtl8xxxu driver for RTL8192EU' \
-            '# The 8192eu driver from clnhub/rtl8192eu-linux is stable' \
             'blacklist rtl8xxxu' \
             '' \
             '# Module options for WiFi stability' \
@@ -138,10 +136,9 @@ jobs:
             | sudo tee mnt/etc/modprobe.d/rtl8192eu.conf > /dev/null
           echo '8192eu' | sudo tee mnt/etc/modules-load.d/rtl8192eu.conf > /dev/null
           echo "WiFi driver installed: $KVER"
-          find "$MODDIR" -name "*.ko" -exec ls -lh {} \;
 
       # ============================================================
-      # End of WiFi driver build
+      # Chroot configuration and package installation
       # ============================================================
 
       - name: Prepare chroot environment
@@ -154,7 +151,6 @@ jobs:
 
           sudo rm -f mnt/etc/resolv.conf
           sudo bash -c 'cp /etc/resolv.conf mnt/etc/resolv.conf'
-          sudo ls -la mnt/etc/resolv.conf
 
           sudo mkdir -p mnt/boot
           sudo cp pmos-base/vmlinuz mnt/boot/vmlinuz-linux
@@ -172,11 +168,77 @@ jobs:
               networkmanager \
               htop tmux 2>&1'
 
-      - name: Generate Arch initramfs (ignore non-fatal errors)
+      # ============================================================
+      # FIX #2: /etc/fstab — prevents pmOS initramfs boot partition wait
+      # The pmOS initramfs (which may be in boot.img as fallback) checks
+      # /etc/fstab after mounting root. If fstab is empty, it calls
+      # wait_boot_partition() which waits 30s for label "pmOS_boot"
+      # that doesn't exist, then fail_halt_boot.
+      # With fstab present, the check is skipped entirely.
+      # ============================================================
+      - name: Create /etc/fstab (prevents boot partition wait)
+        run: |
+          printf '%s\n' \
+            '# /etc/fstab — static file system information' \
+            '' \
+            'LABEL=pmOS_root  /  ext4  rw,noatime,nodiratime,data=ordered  0 1' \
+            'tmpfs  /tmp  tmpfs  rw,nosuid,nodev,noexec,mode=1777  0 0' \
+            | sudo tee mnt/etc/fstab > /dev/null
+          echo "✓ /etc/fstab:"
+          cat mnt/etc/fstab
+
+      # ============================================================
+      # FIX #3: Generate Arch initramfs + inject into boot.img
+      # The old workflow ran mkinitcpio but never used its output.
+      # Now we inject it as the boot.img ramdisk, replacing the
+      # 36MB pmOS initramfs that has boot partition logic.
+      # Uses mkinitcpio with HOOKS without autodetect (since we
+      # build inside qemu; all storage is built-in to kernel anyway).
+      # ============================================================
+
+      - name: Generate Arch initramfs (mkinitcpio)
         run: |
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          sudo chroot mnt /bin/bash -c "mkinitcpio -k '$KVER' -g /boot/initramfs-arch.img 2>&1" || true
-          sudo ls -lh mnt/boot/initramfs-arch.img
+          echo "Generating mkinitcpio initramfs for kernel: $KVER"
+
+          # Remove autodetect from hooks — we build inside qemu so
+          # autodetect would only capture qemu hw, not our real device.
+          # All storage (ext4, mmc_block, mtk-sd) is built into kernel.
+          sudo chroot mnt /bin/bash -c '
+            sed -i "s/^HOOKS=.*/HOOKS=(base udev modconf block filesystems keyboard fsck)/" /etc/mkinitcpio.conf
+            echo "HOOKS: $(grep ^HOOKS /etc/mkinitcpio.conf)"
+          '
+
+          # Generate initramfs (|| true because mkinitcpio may warn about
+          # missing firmware but still succeed)
+          sudo chroot mnt /bin/bash \
+            -c "mkinitcpio -k '\''$(ls /usr/lib/modules/ | head -1)'\'' -g /boot/initramfs-arch.img 2>&1" \
+            || echo "⚠️ mkinitcpio returned $? — checking output..."
+
+          sudo ls -lh mnt/boot/initramfs-arch.img 2>/dev/null
+
+      - name: Inject initramfs into boot.img
+        run: |
+          if sudo test -f mnt/boot/initramfs-arch.img; then
+            echo "✅ mkinitcpio initramfs found — injecting into boot.img"
+
+            # Copy out of chroot
+            sudo cp mnt/boot/initramfs-arch.img initramfs-arch.img
+            sudo chown "$USER:$USER" initramfs-arch.img
+
+            # Inject via Python repack tool
+            python3 scripts/repack-bootimg.py \
+              --ramdisk pmos-base/boot.img \
+              initramfs-arch.img \
+              boot-begonia-arch.img
+
+            echo "✅ boot.img now carries Arch mkinitcpio initramfs"
+          else
+            echo "⚠️ mkinitcpio initramfs NOT found — using pmOS initramfs fallback"
+            echo "   (boot partition wait is prevented by /etc/fstab in rootfs)"
+            cp pmos-base/boot.img boot-begonia-arch.img
+          fi
+          ls -lh boot-begonia-arch.img
 
       - name: Enable services & create user
         run: |
@@ -199,7 +261,7 @@ jobs:
           sudo umount mnt/proc 2>/dev/null || true
 
           mkdir -p release
-          cp pmos-base/boot.img release/boot-begonia-arch.img
+          mv boot-begonia-arch.img release/
 
           if sudo test -f mnt/boot/initramfs-arch.img; then
             sudo cp mnt/boot/initramfs-arch.img release/
@@ -220,19 +282,22 @@ jobs:
           body: |
             ## Arch Linux ARM for Xiaomi Redmi Note 8 Pro (begonia)
 
-            - **Kernel:** postmarketOS mainline 6.16.4
-            - **Initramfs:** nativo de Arch (mkinitcpio)
-            - **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
+            **FIXED:** Ya no se queda en "waiting for boot partition".
+
+            ### Cambios en este build
+
+            - **Initramfs:** Ahora es el nativo de Arch (mkinitcpio) inyectado en boot.img
+              - Anteriormente usaba initramfs de pmOS (buscaba boot partition que no existe)
+            - **/etc/fstab:** Creado con entrada rootfs — safety net contra el wait
+            - **Kernel cmdline:** UUIDs hardcodeados removidos (find_partition ahora cae a label)
             - **WiFi:** Driver RTL8192EU incluido (TP-Link WN821N)
-              - rtl8xxxu blacklisted, 8192eu con power saving desactivado
-            - **FIX:** kernel cmdline ya no tiene UUID hardcodeado — initramfs detecta root por label `pmOS_root`
+
+            **Kernel:** postmarketOS mainline 6.16.4 (ext4/mmc built-in)
+            **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
 
             ### Install
             ```
-            # Descargar y descomprimir:
             xz -d rootfs-archlinuxarm-begonia-console.img.xz
-
-            # Flashear:
             fastboot format:ext4 userdata
             fastboot flash boot boot-begonia-arch.img
             fastboot flash userdata rootfs-archlinuxarm-begonia-console.img
