@@ -508,31 +508,36 @@ jobs:
           echo "DTB: $DTB_SIZE bytes"
           echo "Cmdline: $CMDLINE"
 
-          # Instalar mkbootimg via apt (incluye gki como dependencia)
-          sudo apt-get install -y -qq mkbootimg 2>&1 || {
-            echo "WARNING: apt mkbootimg failed, trying pip..."
-            pip3 install mkbootimg --break-system-packages 2>&1 || \
-            { echo "ERROR: no mkbootimg disponible"; exit 1; }
-          }
+          # Compilar osm0sis/mkbootimg (C binario estatico, sin bug de gki)
+          git clone --depth=1 https://github.com/osm0sis/mkbootimg.git /tmp/mkbootimg-src
+          make -C /tmp/mkbootimg-src 2>&1
+          cp /tmp/mkbootimg-src/mkbootimg /usr/local/bin/mkbootimg
+          chmod +x /usr/local/bin/mkbootimg
+          # Verificar
+          which mkbootimg || { echo "ERROR: mkbootimg not available"; exit 1; }
 
-          # Verificar que el binario existe
-          which mkbootimg || { echo "ERROR: mkbootimg not found"; exit 1; }
-
+          # Parametros oficiales de pmOS deviceinfo para begonia (MT6785):
+          # deviceinfo_flash_offset_base=0x40078000
+          # deviceinfo_flash_offset_kernel=0x00008000
+          # deviceinfo_flash_offset_ramdisk=0x07c08000
+          # deviceinfo_flash_offset_second=0x00f00000
+          # deviceinfo_flash_offset_tags=0x0bc08000
+          # deviceinfo_flash_pagesize=2048
           mkbootimg \
             --kernel "$KERNEL" \
             --ramdisk "$INITRAMFS" \
             --cmdline "$CMDLINE" \
-            --base 0x0 \
+            --base 0x40078000 \
             --kernel_offset 0x00008000 \
-            --ramdisk_offset 0x01000000 \
+            --ramdisk_offset 0x07c08000 \
             --second_offset 0x00f00000 \
-            --tags_offset 0x00000100 \
+            --tags_offset 0x0bc08000 \
             --pagesize 2048 \
             --header_version 2 \
             --dtb "$DTB_FILE" \
             --os_version 23.0.0 \
             --os_patch_level 2026-06 \
-            --output boot-kupfer-begonia.img
+            -o boot-kupfer-begonia.img
 
           echo "=== boot-kupfer-begonia.img ==="
           ls -lh boot-kupfer-begonia.img
