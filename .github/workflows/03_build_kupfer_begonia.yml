@@ -510,6 +510,9 @@ jobs:
 
           # Compilar osm0sis/mkbootimg (C binario estatico, sin bug de gki)
           git clone --depth=1 https://github.com/osm0sis/mkbootimg.git /tmp/mkbootimg-src
+          # Ubuntu 24.04 gcc es mas estricto: -Werror rompe con rsa.c
+          # Remover -Werror para compilar con gcc moderno
+          sed -i 's/-Werror//' /tmp/mkbootimg-src/Makefile /tmp/mkbootimg-src/libmincrypt/Makefile
           make -C /tmp/mkbootimg-src 2>&1
           cp /tmp/mkbootimg-src/mkbootimg /usr/local/bin/mkbootimg
           chmod +x /usr/local/bin/mkbootimg
