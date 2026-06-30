@@ -179,13 +179,19 @@ jobs:
               htop tmux linux-firmware 2>&1
           '
 
-      # Fix #2 (cont): remover linux-aarch64 si se coló via dependencia
+      # Fix #2 (cont): remover linux-aarch64 sin eliminar dependencias
+      # NOTA: -Rns se lleva mkinitcpio (es dependencia de linux-aarch64).
+      # Usar -R solo para no dañar el stack de initramfs.
       - name: Remove stray linux-aarch64
         run: |
           sudo chroot mnt /bin/bash -c '
-            pacman -Rns --noconfirm linux-aarch64 2>&1 || true
+            pacman -R --noconfirm linux-aarch64 2>&1 || true
+            # Reinstalar mkinitcpio por si acaso se perdió
+            pacman -S --noconfirm mkinitcpio mkinitcpio-busybox 2>&1
             echo "=== Remaining module trees ==="
             ls /usr/lib/modules/ 2>/dev/null || echo "(none)"
+            echo "=== mkinitcpio check ==="
+            command -v mkinitcpio && mkinitcpio --version || echo "ERROR: mkinitcpio still missing"
           '
 
       # ============================================================
