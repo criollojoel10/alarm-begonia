@@ -489,7 +489,10 @@ jobs:
           echo "Initramfs: $(ls -lh "$INITRAMFS" | awk '{print $5}')"
           echo "DTB: $(ls -lh "$DTB_FILE" | awk '{print $5}')"
 
-          pip3 install mkbootimg 2>/dev/null || true
+          # Instalar mkbootimg (Ubuntu 24.04 requiere --break-system-packages)
+          pip3 install mkbootimg --break-system-packages 2>&1 || \
+          pip3 install mkbootimg 2>&1 || \
+          { echo 'ERROR: mkbootimg install failed'; exit 1; }
 
           python3 -m mkbootimg \
             --kernel "$KERNEL" \
