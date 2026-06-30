@@ -509,14 +509,14 @@ jobs:
           echo "Cmdline: $CMDLINE"
 
           # Instalar mkbootimg via apt (con recommends para python3-gki)
-          sudo apt-get install -y -qq mkbootimg 2>&1 || {
+          sudo apt-get install -y -qq mkbootimg python3-gki 2>&1 || {
             echo "WARNING: apt mkbootimg failed, trying pip..."
             pip3 install mkbootimg --break-system-packages 2>&1 || \
             { echo "ERROR: no mkbootimg disponible"; exit 1; }
           }
 
-          # Verificar que mkbootimg funciona
-          mkbootimg --help >/dev/null 2>&1 || \
+          # Verificar que mkbootimg funciona (apt install debe traer python3-gki)
+          which mkbootimg && python3 -c 'import mkbootimg; print("mkbootimg OK")' || \
           { echo "ERROR: mkbootimg not functional"; exit 1; }
 
           mkbootimg \
