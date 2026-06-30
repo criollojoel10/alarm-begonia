@@ -1,4 +1,4 @@
-name: "03 — Build Kupfer Linux for begonia"
+name: "03 — Build Kupfer Linux for begonia (WiFi: rtl8xxxu + UNTESTED)"
 
 on:
   workflow_dispatch:
@@ -12,7 +12,6 @@ permissions:
 
 env:
   ARCH_ROOTFS_URL: "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
-  RTL8192EU_REPO: "https://github.com/clnhub/rtl8192eu-linux.git"
   KERNEL_REPO: "https://gitlab.postmarketos.org/mt6785-mainline/linux.git"
   KERNEL_TAG: "6.16.4-r0"
   KERNEL_CONFIG_URL: "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/linux-postmarketos-mediatek-mt6785/config-postmarketos-mediatek-mt6785.aarch64"
@@ -157,7 +156,7 @@ jobs:
               sudo vim nano git openssh rsync curl wget \
               networkmanager iwd wpa_supplicant \
               mkinitcpio mkinitcpio-busybox \
-              htop tmux 2>&1
+              htop tmux linux-firmware 2>&1
           '
 
       # ============================================================
@@ -251,9 +250,6 @@ jobs:
           echo "mkinitcpio configured:"
           cat mnt/etc/mkinitcpio.conf
 
-          echo "mkinitcpio configured:"
-          cat mnt/etc/mkinitcpio.conf | head -20
-
       # ============================================================
       # Install Kupfer deviceinfo
       # ============================================================
@@ -266,7 +262,8 @@ jobs:
           cat mnt/etc/kupfer/deviceinfo
 
       # ============================================================
-      # Build RTL8192EU WiFi driver
+      # Build rtl8xxxu with CONFIG_RTL8XXXU_UNTESTED=y
+      # Enables USB ID 2357:0107 (TP-Link W821N / RTL8192EU)
       # ============================================================
       - name: Restore kernel source cache
         id: cache-kernel
@@ -281,34 +278,54 @@ jobs:
           git clone --depth 1 --branch ${{ env.KERNEL_TAG }} \
             ${{ env.KERNEL_REPO }} linux-kernel 2>&1 | tail -3
 
-      - name: Prepare kernel build tree
+      - name: Prepare kernel build tree (with RTL8XXXU_UNTESTED)
         run: |
           wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
+          # Enable CONFIG_RTL8XXXU_UNTESTED — includes USB ID 2357:0107
+          sed -i 's/^# CONFIG_RTL8XXXU_UNTESTED is not set/CONFIG_RTL8XXXU_UNTESTED=y/' \
+            linux-kernel/.config
+          grep RTL8XXXU_UNTESTED linux-kernel/.config || \
+            echo "CONFIG_RTL8XXXU_UNTESTED=y" >> linux-kernel/.config
           cd linux-kernel
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
+          grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config && echo "✅ UNTESTED=y preserved" || echo "⚠️ UNTESTED=y lost"
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
 
-      - name: Build RTL8192EU
+      - name: Build rtl8xxxu module (in-kernel, with UNTESTED)
         run: |
-          git clone --depth 1 ${{ env.RTL8192EU_REPO }} rtl8192eu-linux
-          cd rtl8192eu-linux
           KSRC="${{ github.workspace }}/linux-kernel"
-          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
-          sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/' Makefile
+          cd "$KSRC"
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            KSRC="$KSRC" KBUILD_MODPOST_WARN=1 2>&1 | tail -10
-          ls -lh 8192eu.ko
+            KBUILD_MODPOST_WARN=1 \
+            M=drivers/net/wireless/realtek/rtl8xxxu modules 2>&1 | tail -20
+          echo "=== Built rtl8xxxu ==="
+          find drivers/net/wireless/realtek/rtl8xxxu -name "*.ko" -exec ls -lh {} \;
 
-      - name: Install WiFi driver
+      - name: Install rtl8xxxu module + config persistente
         run: |
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          MODDIR="mnt/usr/lib/modules/$KVER/extra"
-          sudo mkdir -p "$MODDIR"
-          sudo cp rtl8192eu-linux/8192eu.ko "$MODDIR/"
-          sudo depmod -b mnt "$KVER"
+          MODDIR="mnt/usr/lib/modules/$KVER/kernel/drivers/net/wireless/realtek/rtl8xxxu"
+          if [ -f linux-kernel/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
+            sudo cp linux-kernel/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko "$MODDIR/"
+            sudo depmod -b mnt "$KVER"
+            echo "✅ rtl8xxxu.ko installed (with CONFIG_RTL8XXXU_UNTESTED=y)"
+          else
+            echo "❌ rtl8xxxu.ko not found"
+            find linux-kernel/drivers/net/wireless/realtek/rtl8xxxu -name "*.ko" 2>/dev/null || true
+            exit 1
+          fi
+          # Blacklist broken 8192eu (struct module mismatch con kernel 6.16.4)
           sudo mkdir -p mnt/etc/modprobe.d mnt/etc/modules-load.d
-          echo 'blacklist rtl8xxxu' | sudo tee mnt/etc/modprobe.d/rtl8192eu.conf > /dev/null
-          echo '8192eu' | sudo tee mnt/etc/modules-load.d/rtl8192eu.conf > /dev/null
+          echo 'blacklist 8192eu' | sudo tee mnt/etc/modprobe.d/blacklist-8192eu.conf > /dev/null
+          # Cargar rtl8xxxu al boot
+          echo 'rtl8xxxu' | sudo tee mnt/etc/modules-load.d/rtl8xxxu.conf > /dev/null
+          echo "=== Config installed ==="
+          cat mnt/etc/modprobe.d/blacklist-8192eu.conf
+          cat mnt/etc/modules-load.d/rtl8xxxu.conf
+          # Verify vermagic matches
+          echo "=== Vermagic check ==="
+          modinfo "$MODDIR/rtl8xxxu.ko" | grep vermagic
+          echo "Kernel version: $KVER"
 
       # ============================================================
       # /etc/fstab (Kupfer-style)
