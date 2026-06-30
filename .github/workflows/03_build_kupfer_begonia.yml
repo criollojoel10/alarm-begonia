@@ -232,7 +232,7 @@ jobs:
           # mkinitcpio.conf — Kupfer Linux on begonia
           MODULES=(ext4 mmc_block)
           BINARIES=(/usr/bin/blkid)
-          FILES=(/lib/firmware/regulatory.db)
+          FILES=()
           HOOKS=(base udev autodetect modconf block rootfsdetect filesystems keyboard fsck)
           COMPRESSION="zstd"
           MKINITCPIO_BUSYBOX=1
@@ -324,6 +324,9 @@ jobs:
           cat mnt/etc/fstab
 
       # ============================================================
+      # Copy files out of chroot for non-root access
+      # ============================================================
+      # ============================================================
       # Generate Kupfer initramfs via mkinitcpio
       # ============================================================
       - name: Generate initramfs
@@ -356,33 +359,33 @@ jobs:
           ls -lh mnt/boot/initramfs-*.img 2>/dev/null || true
 
       # ============================================================
+      # Copy boot files out of chroot (for non-root access)
+      # ============================================================
+      - name: Copy boot files out of chroot
+        run: |
+          mkdir -p boot-out
+          sudo cp mnt/boot/initramfs-kupfer.img boot-out/initramfs-kupfer.img 2>/dev/null || true
+          sudo cp mnt/boot/vmlinuz* boot-out/ 2>/dev/null || true
+          sudo find mnt/usr/lib/modules -name "Image*" -o -name "vmlinuz*" 2>/dev/null | head -1 | xargs -r sudo cp -t boot-out/ 2>/dev/null || true
+          sudo chmod 644 boot-out/* 2>/dev/null || true
+          echo "=== boot-out ==="
+          ls -lh boot-out/ 2>/dev/null || echo "(empty)"
+
+      # ============================================================
       # Build Kupfer boot.img
-      # Using pmOS kernel (Image.gz) + DTB + Kupfer initramfs
       # ============================================================
       - name: Build boot.img (Kupfer kernel + initramfs)
         run: |
-          KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          if [ -z "$KVER" ]; then
-            echo "❌ No kernel modules found"
-            exit 1
-          fi
-          echo "Kernel: $KVER"
-
           CMDLINE=$(cat boot-build/cmdline.txt)
           echo "Cmdline: $CMDLINE"
 
-          # Find initramfs we built
-          INITRAMFS=$(find mnt/boot -name "initramfs-kupfer.img" | head -1)
-          [ -z "$INITRAMFS" ] && INITRAMFS=$(find mnt/boot -name "initramfs-*.img" | head -1)
-          [ -z "$INITRAMFS" ] && INITRAMFS=$(find mnt/boot -name "initramfs*" | head -1)
-          echo "Initramfs: $INITRAMFS"
-
+          INITRAMFS="boot-out/initramfs-kupfer.img"
           if [ ! -f "$INITRAMFS" ]; then
-            echo "❌ No initramfs found — was mkinitcpio run?"
-            ls -la mnt/boot/ 2>/dev/null || echo "mnt/boot/ not found"
+            echo "❌ No initramfs found at boot-out/"
+            ls -lh boot-out/ 2>/dev/null || echo "boot-out/ empty"
             exit 1
           fi
-          echo "Initramfs size: $(ls -lh $INITRAMFS | awk '{print $5}')"
+          echo "Initramfs: $INITRAMFS ($(ls -lh $INITRAMFS | awk '{print $5}'))"
 
           PMOS_BOOT="pmos-base/boot.img"
 
@@ -395,28 +398,25 @@ jobs:
               "$CMDLINE" \
               boot-kupfer-begonia.img
           else
-            # Route B: build boot.img from scratch (kernel from chroot + DTB)
+            # Route B: build boot.img from kernel + DTB in chroot (fallback)
             echo "Route B: Building boot.img from chroot"
+            KVER=$(ls mnt/usr/lib/modules/ | head -1)
 
-            # Find kernel (vmlinuz/Image) in chroot
-            VMLINUZ=$(find mnt/boot -name "vmlinuz*" | head -1)
-            [ -z "$VMLINUZ" ] && VMLINUZ=$(find mnt/usr/lib/modules/$KVER -name "vmlinuz*" -o -name "Image*" | head -1)
-            [ -z "$VMLINUZ" ] && VMLINUZ=$(find mnt -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1)
-            echo "Kernel: $VMLINUZ"
+            # Find kernel (sudo to read if needed, then copy)
+            sudo find mnt -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1 | xargs -r sudo cp -t /tmp/ 2>/dev/null || true
+            VMLINUZ=$(ls /tmp/vmlinuz* /tmp/Image* 2>/dev/null | head -1)
 
-            if [ -z "$VMLINUZ" ] || [ ! -f "$VMLINUZ" ]; then
+            if [ -z "$VMLINUZ" ]; then
               echo "❌ No kernel image found"
               exit 1
             fi
 
             # Find DTB
-            DTB=$(find mnt/usr/lib/modules/$KVER/dtbs -name "mt6785*" -o -name "begonia*" | head -1)
-            [ -z "$DTB" ] && DTB=$(find mnt/usr/lib/modules/$KVER/dtbs -name "*.dtb" 2>/dev/null | head -1)
-            echo "DTB: $DTB"
-
-            # Install mkbootimg in a temp manner
-            sudo apt-get install -y -qq android-sdk-libsparse-utils 2>/dev/null || true
-            pip3 install mkbootimg 2>/dev/null || true
+            DTB_SRC=$(sudo find mnt/usr/lib/modules/$KVER/dtbs -name "*.dtb" 2>/dev/null | head -1)
+            if [ -n "$DTB_SRC" ]; then
+              sudo cp "$DTB_SRC" /tmp/device.dtb
+              DTB="/tmp/device.dtb"
+            fi
 
             # Append DTB to kernel if exists
             if [ -f "$DTB" ]; then
@@ -427,7 +427,9 @@ jobs:
               KERNEL_PATH="$VMLINUZ"
             fi
 
-            # Build boot.img
+            # Install mkbootimg
+            pip3 install mkbootimg 2>/dev/null || true
+
             python3 -m mkbootimg \
               --kernel "$KERNEL_PATH" \
               --ramdisk "$INITRAMFS" \
@@ -441,8 +443,7 @@ jobs:
               --os_version 23.0.0 \
               --os_patch_level 2026-06 \
               -o boot-kupfer-begonia.img 2>&1 || {
-              # Fallback: use the repacker from a dummy boot.img
-              echo "mkbootimg failed, using Python repacker from nightly boot.img..."
+              echo "mkbootimg failed, trying repack with nightly boot.img..."
               curl -sL -o /tmp/nightly-boot.img \
                 'https://github.com/criollojoel10/alarm-begonia/releases/download/nightly/boot-begonia-arch.img' && \
                 python3 scripts/repack-bootimg.py /tmp/nightly-boot.img "$INITRAMFS" "$CMDLINE" boot-kupfer-begonia.img || {
@@ -455,7 +456,7 @@ jobs:
           echo "=== boot.img ==="
           ls -lh boot-kupfer-begonia.img
 
-          # Verify cmdline
+          # Verify
           python3 -c "
           import struct
           with open('boot-kupfer-begonia.img', 'rb') as f:
