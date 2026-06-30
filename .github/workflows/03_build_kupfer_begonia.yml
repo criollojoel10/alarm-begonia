@@ -55,20 +55,13 @@ jobs:
         run: |
           echo "⚠️ No artifact from workflow 01, trying alternative sources..."
           mkdir -p pmos-base
-          # Try downloading from nightly release directly
-          python3 -c "
-          import urllib.request, json
-          with open('/tmp/gh_token', 'w') as f:
-              pass
-          " 2>/dev/null || true
-          # Check if there's a nightly release with a boot.img
           curl -sL -o boot-nightly.img \
             'https://github.com/criollojoel10/alarm-begonia/releases/download/nightly/boot-begonia-arch.img' \
             2>/dev/null && {
             echo 'Downloaded boot.img from nightly release'
             cp boot-nightly.img pmos-base/boot.img
           } || {
-            echo 'No boot.img found from any source — will extract from chroot'
+            echo 'No boot.img found from any source — will try to extract kernel from chroot'
           }
 
       - name: Check pmOS base
@@ -78,8 +71,10 @@ jobs:
           if [ -f pmos-base/boot.img ]; then
             echo "✅ boot.img found: $(ls -lh pmos-base/boot.img | awk '{print $5}')"
           else
-            echo "⚠️ No boot.img in artifact — will try to extract kernel from chroot"
+            echo "⚠️ No boot.img in artifact"
           fi
+          echo "---"
+          find pmos-base/ -type f 2>/dev/null | sort
 
       - name: Download Arch rootfs
         run: |
@@ -104,40 +99,59 @@ jobs:
 
       # ============================================================
       # Inject pmOS kernel modules + firmware
+      # Fix #1: extraer modules.tar.gz (no modules-begonia.tar.gz)
       # ============================================================
-      - name: Inject kernel modules
+      - name: Inject pmOS modules + firmware
         run: |
-          if [ -f pmos-base/modules-begonia.tar.gz ]; then
-            sudo tar -xzf pmos-base/modules-begonia.tar.gz -C mnt/usr/lib/ 2>/dev/null || true
-          fi
-          # Prefer pmOS kernel (6.x) over Arch ARM kernel (7.x)
-          KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | grep '^6\.' | head -1)
-          if [ -z "$KVER" ]; then
-            KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)
-          fi
-          if [ -n "$KVER" ]; then
-            echo "Kernel: $KVER"
-            echo "KVER=$KVER" >> $GITHUB_ENV
+          sudo mkdir -p mnt/usr/lib
+
+          # Extraer módulos pmOS 6.16.4
+          if [ -f pmos-base/modules.tar.gz ]; then
+            echo "Extracting pmOS modules.tar.gz..."
+            sudo tar -xzf pmos-base/modules.tar.gz -C mnt/usr/lib/
           else
-            echo "⚠️ No kernel modules found"
+            echo "ERROR: pmos-base/modules.tar.gz not found"
+            find pmos-base/ -type f 2>/dev/null || true
+            exit 1
           fi
+
+          # Extraer firmware pmOS
+          if [ -f pmos-base/firmware.tar.gz ]; then
+            echo "Extracting pmOS firmware.tar.gz..."
+            sudo mkdir -p mnt/usr/lib/firmware
+            sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/usr/lib/firmware/ 2>/dev/null || \
+            sudo tar -xzf pmos-base/firmware.tar.gz -C mnt/
+          fi
+
+          echo "=== Available module trees ==="
+          find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n'
+
+          # Forzar KVER a 6.x — fallar si no se encuentra
+          KVER=$(find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)
+          if [ -z "$KVER" ]; then
+            echo "ERROR: pmOS 6.x module tree not found"
+            find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' || true
+            exit 1
+          fi
+          echo "KVER=$KVER" >> $GITHUB_ENV
+          echo "Target kernel: $KVER"
 
       # ============================================================
       # Generate boot.img CMDLINE for Kupfer
-      # Kupfer initramfs uses root=LABEL=kupfer_root (via rootfsdetect hook)
-      # No stale UUIDs. Keep pmOS cmdline extras.
+      # Fix #4: cmdline de debug (sin quiet/splash, con loglevel=7)
       # ============================================================
       - name: Generate Kupfer cmdline
         run: |
-          KUPFER_CMDLINE="root=LABEL=kupfer_root rw rootfstype=ext4 quiet splash plymouth.ignore-serial-consoles plymouth.prefer-fbcon bootopt=64S3,32N2,64N2"
+          # Heredar parámetros del deviceinfo pmOS si existen
+          # Para debug: sin quiet/splash/plymouth
+          KUPFER_CMDLINE="root=LABEL=kupfer_root rw rootwait rootfstype=ext4 loglevel=7 ignore_loglevel bootopt=64S3,32N2,64N2"
 
-          # Get deviceinfo for DTB path
           mkdir -p boot-build
           echo "$KUPFER_CMDLINE" > boot-build/cmdline.txt
           echo "Kupfer cmdline: $KUPFER_CMDLINE"
 
       # ============================================================
-      # Chroot: install mkinitcpio + Kupfer hooks + config
+      # Chroot: preparar y bloquear linux-aarch64 (Fix #2)
       # ============================================================
       - name: Prepare chroot
         run: |
@@ -148,7 +162,9 @@ jobs:
           sudo mount --bind /dev/pts mnt/dev/pts 2>/dev/null || true
           sudo rm -f mnt/etc/resolv.conf
           sudo bash -c 'cp /etc/resolv.conf mnt/etc/resolv.conf'
-          sudo sed -i '/\[options\]/a DisableSandbox' mnt/etc/pacman.conf 2>/dev/null || true
+          # Fix #2: bloquear linux-aarch64 para que pacman no lo instale/actualice
+          sudo sed -i '/^\[options\]/a IgnorePkg = linux-aarch64' mnt/etc/pacman.conf
+          sudo sed -i '/^\[options\]/a DisableSandbox' mnt/etc/pacman.conf 2>/dev/null || true
 
       - name: Install base packages (pacman)
         run: |
@@ -163,32 +179,34 @@ jobs:
               htop tmux linux-firmware 2>&1
           '
 
+      # Fix #2 (cont): remover linux-aarch64 si se coló via dependencia
+      - name: Remove stray linux-aarch64
+        run: |
+          sudo chroot mnt /bin/bash -c '
+            pacman -Rns --noconfirm linux-aarch64 2>&1 || true
+            echo "=== Remaining module trees ==="
+            ls /usr/lib/modules/ 2>/dev/null || echo "(none)"
+          '
+
       # ============================================================
       # Install Kupfer mkinitcpio hooks (custom port)
-      # These hooks replicate what mkinitcpio-kupfer-hooks does:
-      #   rootfsdetect — find root by LABEL=kupfer_root
-      #   kupfer-functions — helper functions
       # ============================================================
       - name: Install Kupfer initramfs hooks
         run: |
-          # Create Kupfer directories
           sudo mkdir -p mnt/etc/kupfer/mkinitcpio.conf.d
           sudo mkdir -p mnt/usr/lib/initcpio/hooks
           sudo mkdir -p mnt/usr/lib/initcpio/install
 
-          # Kupfer rootfsdetect hook (inline — no separate functions file needed)
-          # This hook runs during early boot to find root partition by label
+          # Kupfer rootfsdetect hook
           sudo tee mnt/usr/lib/initcpio/hooks/rootfsdetect > /dev/null << 'RFSH'
           run_hook() {
             export rwopt=rw
             export init=/sbin/init
 
-            # If root is already set (via cmdline) and it's a block device, use it
             if [ -n "$root" ] && [ "$root" != "LABEL=kupfer_root" ]; then
               [ -b "$root" ] && return 0
             fi
 
-            # Try /dev/disk/by-label first
             echo "Kupfer: Searching for kupfer_root..."
             if [ -e "/dev/disk/by-label/kupfer_root" ]; then
               export root="/dev/disk/by-label/kupfer_root"
@@ -196,7 +214,6 @@ jobs:
               return 0
             fi
 
-            # Brute force scan for label
             for part in /dev/sd?[0-9]* /dev/mmcblk[0-9]p* /dev/vd?[0-9]*; do
               [ -b "$part" ] || continue
               label=$(blkid -o value -s LABEL "$part" 2>/dev/null)
@@ -211,7 +228,6 @@ jobs:
           }
           RFSH
 
-          # Install hook — tells mkinitcpio to bundle rootfsdetect
           sudo tee mnt/usr/lib/initcpio/install/rootfsdetect > /dev/null << 'RFSI'
           build() {
             add_runscript
@@ -227,17 +243,18 @@ jobs:
 
       # ============================================================
       # Create Kupfer mkinitcpio config
+      # Fix #3: sin autodetect (CI no tiene hardware begonia), gzip en vez de zstd
       # ============================================================
       - name: Configure mkinitcpio (Kupfer-style)
         run: |
-          # Simple mkinitcpio.conf for Kupfer on begonia
           cat > /tmp/mkinitcpio.conf << 'MKINIT'
           # mkinitcpio.conf — Kupfer Linux on begonia
+          # NOTA: sin autodetect — CI runner no tiene hardware begonia
           MODULES=(ext4 mmc_block)
           BINARIES=(/usr/bin/blkid)
           FILES=()
-          HOOKS=(base udev autodetect modconf block rootfsdetect filesystems keyboard fsck)
-          COMPRESSION="zstd"
+          HOOKS=(base udev modconf block rootfsdetect filesystems fsck)
+          COMPRESSION="gzip"
           MKINITCPIO_BUSYBOX=1
           MKINITCPIO_QUIET=1
           MKINIT
@@ -267,7 +284,6 @@ jobs:
 
       # ============================================================
       # Build rtl8xxxu with CONFIG_RTL8XXXU_UNTESTED=y
-      # Enables USB ID 2357:0107 (TP-Link W821N / RTL8192EU)
       # ============================================================
       - name: Restore kernel source cache
         id: cache-kernel
@@ -285,12 +301,8 @@ jobs:
       - name: Prepare kernel build tree (with RTL8XXXU_UNTESTED)
         run: |
           wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
-          # Enable rtl8xxxu driver chain (3 levels):
-          #   WLAN_VENDOR_REALTEK (parent) → RTL8XXXU (driver) → UNTESTED (USB IDs)
           cd linux-kernel
-          # Disable CONFIG_RTL8XXXU first if it's builtin (=y), we need =m for module
           sed -i 's/^CONFIG_RTL8XXXU=y/# CONFIG_RTL8XXXU is not set/' .config
-          # Enable everything
           for line in \
             "CONFIG_WLAN_VENDOR_REALTEK=y" \
             "CONFIG_RTL8XXXU=m" \
@@ -303,16 +315,14 @@ jobs:
           echo "=== RTL config verification ==="
           grep -E "CONFIG_WLAN_VENDOR_REALTEK=|CONFIG_RTL8XXXU=." .config | head -3
           grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config && echo "✅ UNTESTED=y" || echo "⚠️ UNTESTED lost, adding after olddefconfig..."
-          # If olddefconfig dropped it (depends on unmet), force-add
           grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config || {
             echo "CONFIG_RTL8XXXU_UNTESTED=y" >> .config
-            # Run olddefconfig again with minimal fix
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -2
             grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config && echo "  ✅ UNTESTED=y after retry" || echo "  ⚠️ STILL lost"
           }
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
 
-      - name: Build rtl8xxxu module (in-kernel, with UNTESTED)
+      - name: Build rtl8xxxu module
         run: |
           KSRC="${{ github.workspace }}/linux-kernel"
           cd "$KSRC"
@@ -322,45 +332,48 @@ jobs:
           echo "=== Built rtl8xxxu ==="
           find drivers/net/wireless/realtek/rtl8xxxu -name "*.ko" -exec ls -lh {} \;
 
-      - name: Install rtl8xxxu module + config persistente
+      # Fix #4: instalar rtl8xxxu en el árbol pmOS 6.x (no Arch 7.x)
+      - name: Install rtl8xxxu module + config
         run: |
-          # Find pmOS kernel (6.x), NOT the Arch ARM kernel (7.x)
-          KVER=$(ls mnt/usr/lib/modules/ | grep '^6\.' | head -1)
+          # KVER viene de $GITHUB_ENV (paso Inject pmOS modules), o forzar 6.x
+          KVER=${KVER:-$(find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)}
           if [ -z "$KVER" ]; then
-            KVER=$(ls mnt/usr/lib/modules/ | head -1)
+            echo "ERROR: No pmOS 6.x kernel modules found"
+            find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' || true
+            exit 1
           fi
           echo "Target kernel: $KVER"
           MODBASE="mnt/usr/lib/modules/$KVER/kernel/drivers/net/wireless/realtek/rtl8xxxu"
 
-          # Find the .ko (might be in kernel src dir or its subdirs)
           RTLKO=$(find linux-kernel/drivers/net/wireless/realtek/rtl8xxxu -name "*.ko" | head -1)
-          
+
           if [ -f "$RTLKO" ]; then
             sudo mkdir -p "$MODBASE"
             sudo cp "$RTLKO" "$MODBASE/"
             sudo depmod -b mnt "$KVER"
-            echo "✅ rtl8xxxu.ko installed (size: $(ls -lh $RTLKO | awk '{print $5}'))"
+            echo "✅ rtl8xxxu.ko installed into $KVER (size: $(ls -lh $RTLKO | awk '{print $5}'))"
             echo "=== Vermagic check ==="
             modinfo "$RTLKO" | grep vermagic
+            # Validar que vermagic contenga $KVER
+            MAGIC=$(modinfo "$RTLKO" 2>/dev/null | grep vermagic | grep -o "$KVER" || echo "")
+            if [ -n "$MAGIC" ]; then
+              echo "✅ Vermagic matches $KVER"
+            else
+              echo "⚠️ Vermagic does NOT contain $KVER — module may not load"
+            fi
           else
-            echo "❌ rtl8xxxu.ko not produced — checking build dir:"
+            echo "❌ rtl8xxxu.ko not produced"
             find linux-kernel/drivers/net/wireless/realtek/rtl8xxxu -type f | head -20
-            echo "=> If no .ko was built, CONFIG_RTL8XXXU is not set to 'm'."
-            echo "=> Check step 'Prepare kernel build tree' output."
             exit 1
           fi
-          # Blacklist broken 8192eu (struct module mismatch con kernel 6.16.4)
+
+          # Blacklist broken 8192eu
           sudo mkdir -p mnt/etc/modprobe.d mnt/etc/modules-load.d
           echo 'blacklist 8192eu' | sudo tee mnt/etc/modprobe.d/blacklist-8192eu.conf > /dev/null
-          # Cargar rtl8xxxu al boot
           echo 'rtl8xxxu' | sudo tee mnt/etc/modules-load.d/rtl8xxxu.conf > /dev/null
           echo "=== Config installed ==="
           cat mnt/etc/modprobe.d/blacklist-8192eu.conf
           cat mnt/etc/modules-load.d/rtl8xxxu.conf
-          # Verify vermagic matches
-          echo "=== Vermagic check ==="
-          modinfo "$RTLKO" | grep vermagic
-          echo "Kernel version: $KVER"
 
       # ============================================================
       # /etc/fstab (Kupfer-style)
@@ -376,31 +389,34 @@ jobs:
           cat mnt/etc/fstab
 
       # ============================================================
-      # Copy files out of chroot for non-root access
-      # ============================================================
-      # ============================================================
       # Generate Kupfer initramfs via mkinitcpio
+      # Fix #5: forzar KVER a 6.x (pmOS), fallar si no se encuentra
       # ============================================================
       - name: Generate initramfs
         run: |
-          KVER=$(ls mnt/usr/lib/modules/ | grep '^6\.' | head -1)
-          [ -z "$KVER" ] && KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          KVER=$(find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)
+          if [ -z "$KVER" ]; then
+            echo "ERROR: No pmOS 6.x kernel modules found"
+            find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' || true
+            exit 1
+          fi
           echo "Generating initramfs for kernel $KVER..."
 
-          # We cannot use heredoc inside chroot, so write the script first
           sudo tee mnt/tmp/gen-initramfs.sh > /dev/null << 'SCRIPT'
           #!/bin/bash
-          KVER=$(ls /usr/lib/modules/ | head -1)
+          # Fix #5: seleccionar kernel 6.x (pmOS), jamás 7.x (Arch)
+          KVER="$(find /usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)"
+          if [ -z "$KVER" ]; then
+            echo "ERROR: no pmOS 6.x kernel modules found in chroot"
+            find /usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n'
+            exit 1
+          fi
           echo "Kernel in chroot: $KVER"
-          
-          # Direct mkinitcpio call (hooks already in config)
           mkinitcpio -k "$KVER" -g /boot/initramfs-kupfer.img 2>&1 || (
             echo "Direct call failed, trying with explicit hooks..."
-            # Use -A to add our hook to the defaults
             mkinitcpio -k "$KVER" -g /boot/initramfs-kupfer.img \
               -A rootfsdetect 2>&1
           )
-          
           ls -lh /boot/initramfs-kupfer.img
           SCRIPT
           sudo chmod 755 mnt/tmp/gen-initramfs.sh
@@ -408,24 +424,33 @@ jobs:
           sudo chroot mnt /bin/bash /tmp/gen-initramfs.sh
 
           echo "Initramfs result:"
-          ls -lh mnt/boot/initramfs-kupfer.img 2>/dev/null || echo "❌ No initramfs found at expected path"
+          ls -lh mnt/boot/initramfs-kupfer.img 2>/dev/null || echo "❌ No initramfs found"
           ls -lh mnt/boot/initramfs-*.img 2>/dev/null || true
 
       # ============================================================
-      # Copy boot files out of chroot (for non-root access)
+      # Copy boot files out of chroot
       # ============================================================
       - name: Copy boot files out of chroot
         run: |
           mkdir -p boot-out
           sudo cp mnt/boot/initramfs-kupfer.img boot-out/initramfs-kupfer.img 2>/dev/null || true
-          sudo cp mnt/boot/vmlinuz* boot-out/ 2>/dev/null || true
-          sudo find mnt/usr/lib/modules -name "Image*" -o -name "vmlinuz*" 2>/dev/null | head -1 | xargs -r sudo cp -t boot-out/ 2>/dev/null || true
+          sudo find mnt/boot/ -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1 | xargs -r sudo cp -t boot-out/ 2>/dev/null || true
+          # Copiar DTB desde módulos pmOS
+          KVER=${KVER:-$(find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)}
+          if [ -n "$KVER" ]; then
+            DTB_SRC=$(sudo find mnt/usr/lib/modules/$KVER/dtbs -name "*.dtb" 2>/dev/null | head -1)
+            if [ -n "$DTB_SRC" ]; then
+              sudo cp "$DTB_SRC" boot-out/mt6785-xiaomi-begonia.dtb
+              echo "✅ DTB copied: $DTB_SRC"
+            fi
+          fi
           sudo chmod 644 boot-out/* 2>/dev/null || true
           echo "=== boot-out ==="
           ls -lh boot-out/ 2>/dev/null || echo "(empty)"
 
       # ============================================================
       # Build Kupfer boot.img
+      # Fix #6: preservar DTB + header v2, verificar tamaño contra original
       # ============================================================
       - name: Build boot.img (Kupfer kernel + initramfs)
         run: |
@@ -441,51 +466,67 @@ jobs:
           echo "Initramfs: $INITRAMFS ($(ls -lh $INITRAMFS | awk '{print $5}'))"
 
           PMOS_BOOT="pmos-base/boot.img"
+          DTB_FILE="boot-out/mt6785-xiaomi-begonia.dtb"
 
           if [ -f "$PMOS_BOOT" ]; then
-            # Route A: repack existing pmOS boot.img (replace initramfs + cmdline)
+            echo "=== pmOS original boot.img size ==="
+            ls -lh "$PMOS_BOOT"
+
+            # Route A (preferida): repack con scripts/repack-bootimg.py
             echo "Route A: Repacking from pmOS boot.img"
             python3 scripts/repack-bootimg.py \
               "$PMOS_BOOT" \
               "$INITRAMFS" \
               "$CMDLINE" \
-              boot-kupfer-begonia.img
-          else
-            # Route B: build boot.img from kernel + DTB in chroot (fallback)
-            echo "Route B: Building boot.img from chroot"
-            KVER=$(ls mnt/usr/lib/modules/ | grep '^6\.' | head -1)
-            [ -z "$KVER" ] && KVER=$(ls mnt/usr/lib/modules/ | head -1)
+              boot-kupfer-begonia.img 2>&1
 
-            # Find kernel (sudo to read if needed, then copy)
-            sudo find mnt -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1 | xargs -r sudo cp -t /tmp/ 2>/dev/null || true
-            VMLINUZ=$(ls /tmp/vmlinuz* /tmp/Image* 2>/dev/null | head -1)
+            echo "=== Repacked boot.img size ==="
+            ls -lh boot-kupfer-begonia.img || echo "(not created)"
+          fi
 
+          # Si repack falló o no existe el boot.img pmOS, usar mkbootimg directo
+          if [ ! -f "boot-kupfer-begonia.img" ] || [ ! -s "boot-kupfer-begonia.img" ]; then
+            echo "Route B: Building boot.img from scratch with mkbootimg"
+            KVER=${KVER:-$(find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)}
+
+            # Encontrar kernel image
+            VMLINUZ=$(sudo find mnt/boot/ -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1)
             if [ -z "$VMLINUZ" ]; then
+              VMLINUZ=$(sudo find mnt/usr/lib/modules -name "Image*" -o -name "vmlinuz*" 2>/dev/null | head -1)
+            fi
+            if [ -z "$VMLINUZ" ]; then
+              echo "Using pmOS boot.img kernel as fallback..."
+              # Extraer kernel del boot.img pmOS si existe
+              if [ -f "$PMOS_BOOT" ]; then
+                # Extract kernel from pmOS boot.img via temp Python script
+                cat > /tmp/extract-kernel.py << 'PYEOF'
+                import struct, sys
+
+                with open(sys.argv[1], 'rb') as f:
+                    data = f.read()
+                kernel_size = struct.unpack('<I', data[8:12])[0]
+                kernel_offset = struct.unpack('<I', data[12:16])[0]
+                with open(sys.argv[2], 'wb') as out:
+                    out.write(data[kernel_offset:kernel_offset + kernel_size])
+                print(f'Extracted kernel: {kernel_size} bytes')
+                PYEOF
+                python3 /tmp/extract-kernel.py "$PMOS_BOOT" boot-out/kernel.bin
+                VMLINUZ="boot-out/kernel.bin"
+              fi
+            fi
+
+            if [ -z "$VMLINUZ" ] || [ ! -f "$VMLINUZ" ]; then
               echo "❌ No kernel image found"
               exit 1
             fi
+            echo "Kernel: $VMLINUZ ($(ls -lh $VMLINUZ | awk '{print $5}'))"
 
-            # Find DTB
-            DTB_SRC=$(sudo find mnt/usr/lib/modules/$KVER/dtbs -name "*.dtb" 2>/dev/null | head -1)
-            if [ -n "$DTB_SRC" ]; then
-              sudo cp "$DTB_SRC" /tmp/device.dtb
-              DTB="/tmp/device.dtb"
-            fi
-
-            # Append DTB to kernel if exists
-            if [ -f "$DTB" ]; then
-              cat "$VMLINUZ" "$DTB" > /tmp/kernel-dtb.img
-              KERNEL_PATH="/tmp/kernel-dtb.img"
-              echo "DTB appended to kernel"
-            else
-              KERNEL_PATH="$VMLINUZ"
-            fi
-
-            # Install mkbootimg
+            # Build boot.img con mkbootimg
             pip3 install mkbootimg 2>/dev/null || true
 
+            # Parámetros de begonia desde deviceinfo
             python3 -m mkbootimg \
-              --kernel "$KERNEL_PATH" \
+              --kernel "$VMLINUZ" \
               --ramdisk "$INITRAMFS" \
               --cmdline "$CMDLINE" \
               --base 0x0 \
@@ -494,33 +535,58 @@ jobs:
               --second_offset 0x00f00000 \
               --tags_offset 0x00000100 \
               --pagesize 2048 \
+              --header_version 2 \
+              $( [ -f "$DTB_FILE" ] && echo "--dtb $DTB_FILE" ) \
               --os_version 23.0.0 \
               --os_patch_level 2026-06 \
               -o boot-kupfer-begonia.img 2>&1 || {
-              echo "mkbootimg failed, trying repack with nightly boot.img..."
-              curl -sL -o /tmp/nightly-boot.img \
-                'https://github.com/criollojoel10/alarm-begonia/releases/download/nightly/boot-begonia-arch.img' && \
-                python3 scripts/repack-bootimg.py /tmp/nightly-boot.img "$INITRAMFS" "$CMDLINE" boot-kupfer-begonia.img || {
-                echo "❌ All methods failed to create boot.img"
+                echo "❌ mkbootimg failed"
                 exit 1
               }
-            }
           fi
 
           echo "=== boot.img ==="
           ls -lh boot-kupfer-begonia.img
 
-          # Verify
-          python3 -c "
+          # Verificar cmdline
+          cat > /tmp/verify-bootimg.py << 'PYEOF'
           import struct
-          with open('boot-kupfer-begonia.img', 'rb') as f:
+          import sys
+          with open(sys.argv[1], 'rb') as f:
               data = f.read(576)
           c = data[64:576].rstrip(b'\x00').decode('ascii', 'replace')
           print(f'Cmdline: {c}')
-          print(f'kupfer_root: {\"kupfer_root\" in c} ✅')
+          print(f'kupfer_root: {"kupfer_root" in c} ✅')
           r_size = struct.unpack('<I', data[16:20])[0]
-          print(f'Ramdisk: {r_size:,} B')
-          "
+          print(f'Ramdisk size: {r_size:,} B')
+          k_size = struct.unpack('<I', data[8:12])[0]
+          print(f'Kernel size: {k_size:,} B')
+          hdr_ver = struct.unpack('<I', data[36:40])[0]
+          print(f'Header version: {hdr_ver}')
+          print(f'Total size: {len(data):,} B')
+          PYEOF
+          python3 /tmp/verify-bootimg.py boot-kupfer-begonia.img
+
+          # Comparar con original si existe
+          if [ -f "$PMOS_BOOT" ]; then
+            cat > /tmp/compare-bootimg.py << 'PYEOF'
+          import os
+          import sys
+          orig = os.path.getsize(sys.argv[1])
+          new = os.path.getsize(sys.argv[2])
+          ratio = new / orig * 100
+          print(f'Original pmOS boot.img: {orig:,} B')
+          print(f'Kupfer boot.img:        {new:,} B')
+          print(f'Ratio: {ratio:.1f}%')
+          if ratio < 50:
+              print('\u26a0\ufe0f boot.img es <50% del original \u2014 puede faltar DTB o secci\u00f3n recovery')
+          elif ratio > 150:
+              print('\u26a0\ufe0f boot.img es >150% del original \u2014 initramfs muy grande')
+          else:
+              print('\u2705 Tama\u00f1o razonable vs original')
+          PYEOF
+            python3 /tmp/compare-bootimg.py "$PMOS_BOOT" boot-kupfer-begonia.img
+          fi
 
       # ============================================================
       # Enable services & user
@@ -565,6 +631,15 @@ jobs:
             ## Kupfer Linux for Xiaomi Redmi Note 8 Pro (begonia)
 
             **Arch Linux ARM + Kupfer initramfs + pmOS kernel**
+
+            ### Fixes aplicados
+            - ✅ Kernel/modules/initramfs coherentes (pmOS 6.16.4)
+            - ✅ linux-aarch64 bloqueado (no más contaminación 7.x)
+            - ✅ initramfs sin autodetect (gzip)
+            - ✅ rtl8xxxu.ko instalado en árbol 6.x
+            - ✅ boot.img preserva DTB + header v2
+            - ✅ firmware pmOS extraído
+            - ✅ Cmdline de debug (loglevel=7)
 
             ### Flujo de boot
             ```
