@@ -465,8 +465,7 @@ jobs:
 
           INITRAMFS="boot-out/initramfs-kupfer.img"
           if [ ! -f "$INITRAMFS" ]; then
-            echo "❌ No initramfs found at boot-out/"
-            ls -lh boot-out/ 2>/dev/null || echo "boot-out/ empty"
+            echo "No initramfs found at boot-out/"
             exit 1
           fi
           echo "Initramfs: $INITRAMFS ($(ls -lh $INITRAMFS | awk '{print $5}'))"
@@ -477,60 +476,30 @@ jobs:
           if [ -f "$PMOS_BOOT" ]; then
             echo "=== pmOS original boot.img size ==="
             ls -lh "$PMOS_BOOT"
-
-            # Route A (preferida): repack con scripts/repack-bootimg.py
             echo "Route A: Repacking from pmOS boot.img"
             python3 scripts/repack-bootimg.py \
-              "$PMOS_BOOT" \
-              "$INITRAMFS" \
-              "$CMDLINE" \
+              "$PMOS_BOOT" "$INITRAMFS" "$CMDLINE" \
               boot-kupfer-begonia.img 2>&1
-
             echo "=== Repacked boot.img size ==="
             ls -lh boot-kupfer-begonia.img || echo "(not created)"
           fi
 
-          # Si repack falló o no existe el boot.img pmOS, usar mkbootimg directo
+          # Route B: mkbootimg directo
           if [ ! -f "boot-kupfer-begonia.img" ] || [ ! -s "boot-kupfer-begonia.img" ]; then
             echo "Route B: Building boot.img from scratch with mkbootimg"
-            KVER=${KVER:-$(find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)}
-
-            # Encontrar kernel image
-            VMLINUZ=$(sudo find mnt/boot/ -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1)
-            if [ -z "$VMLINUZ" ]; then
-              VMLINUZ=$(sudo find mnt/usr/lib/modules -name "Image*" -o -name "vmlinuz*" 2>/dev/null | head -1)
+            KVER=${KVER:-$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)}
+            VMLINUZ=$(sudo find mnt/boot/ mnt/usr/lib/modules -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1)
+            if [ -z "$VMLINUZ" ] && [ -f "$PMOS_BOOT" ]; then
+              echo "Extracting kernel from pmOS boot.img..."
+              python3 scripts/extract-kernel.py "$PMOS_BOOT" boot-out/kernel.bin
+              VMLINUZ="boot-out/kernel.bin"
             fi
-            if [ -z "$VMLINUZ" ]; then
-              echo "Using pmOS boot.img kernel as fallback..."
-              # Extraer kernel del boot.img pmOS si existe
-              if [ -f "$PMOS_BOOT" ]; then
-                # Extract kernel from pmOS boot.img via temp Python script
-                cat > /tmp/extract-kernel.py << 'PYEOF'
-                import struct, sys
-
-                with open(sys.argv[1], 'rb') as f:
-                    data = f.read()
-                kernel_size = struct.unpack('<I', data[8:12])[0]
-                kernel_offset = struct.unpack('<I', data[12:16])[0]
-                with open(sys.argv[2], 'wb') as out:
-                    out.write(data[kernel_offset:kernel_offset + kernel_size])
-                print(f'Extracted kernel: {kernel_size} bytes')
-                PYEOF
-                python3 /tmp/extract-kernel.py "$PMOS_BOOT" boot-out/kernel.bin
-                VMLINUZ="boot-out/kernel.bin"
-              fi
-            fi
-
             if [ -z "$VMLINUZ" ] || [ ! -f "$VMLINUZ" ]; then
-              echo "❌ No kernel image found"
+              echo "No kernel image found"
               exit 1
             fi
             echo "Kernel: $VMLINUZ ($(ls -lh $VMLINUZ | awk '{print $5}'))"
-
-            # Build boot.img con mkbootimg
             pip3 install mkbootimg 2>/dev/null || true
-
-            # Parámetros de begonia desde deviceinfo
             python3 -m mkbootimg \
               --kernel "$VMLINUZ" \
               --ramdisk "$INITRAMFS" \
@@ -546,52 +515,16 @@ jobs:
               --os_version 23.0.0 \
               --os_patch_level 2026-06 \
               -o boot-kupfer-begonia.img 2>&1 || {
-                echo "❌ mkbootimg failed"
+                echo "mkbootimg failed"
                 exit 1
               }
           fi
 
           echo "=== boot.img ==="
           ls -lh boot-kupfer-begonia.img
-
-          # Verificar cmdline
-          cat > /tmp/verify-bootimg.py << 'PYEOF'
-          import struct
-          import sys
-          with open(sys.argv[1], 'rb') as f:
-              data = f.read(576)
-          c = data[64:576].rstrip(b'\x00').decode('ascii', 'replace')
-          print(f'Cmdline: {c}')
-          print(f'kupfer_root: {"kupfer_root" in c} ✅')
-          r_size = struct.unpack('<I', data[16:20])[0]
-          print(f'Ramdisk size: {r_size:,} B')
-          k_size = struct.unpack('<I', data[8:12])[0]
-          print(f'Kernel size: {k_size:,} B')
-          hdr_ver = struct.unpack('<I', data[36:40])[0]
-          print(f'Header version: {hdr_ver}')
-          print(f'Total size: {len(data):,} B')
-          PYEOF
-          python3 /tmp/verify-bootimg.py boot-kupfer-begonia.img
-
-          # Comparar con original si existe
+          python3 scripts/verify-bootimg.py boot-kupfer-begonia.img
           if [ -f "$PMOS_BOOT" ]; then
-            cat > /tmp/compare-bootimg.py << 'PYEOF'
-          import os
-          import sys
-          orig = os.path.getsize(sys.argv[1])
-          new = os.path.getsize(sys.argv[2])
-          ratio = new / orig * 100
-          print(f'Original pmOS boot.img: {orig:,} B')
-          print(f'Kupfer boot.img:        {new:,} B')
-          print(f'Ratio: {ratio:.1f}%')
-          if ratio < 50:
-              print('\u26a0\ufe0f boot.img es <50% del original \u2014 puede faltar DTB o secci\u00f3n recovery')
-          elif ratio > 150:
-              print('\u26a0\ufe0f boot.img es >150% del original \u2014 initramfs muy grande')
-          else:
-              print('\u2705 Tama\u00f1o razonable vs original')
-          PYEOF
-            python3 /tmp/compare-bootimg.py "$PMOS_BOOT" boot-kupfer-begonia.img
+            python3 scripts/compare-bootimg.py "$PMOS_BOOT" boot-kupfer-begonia.img
           fi
 
       # ============================================================
