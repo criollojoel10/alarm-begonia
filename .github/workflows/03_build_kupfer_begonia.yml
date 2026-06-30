@@ -359,7 +359,7 @@ jobs:
           cat mnt/etc/modules-load.d/rtl8xxxu.conf
           # Verify vermagic matches
           echo "=== Vermagic check ==="
-          modinfo "$MODDIR/rtl8xxxu.ko" | grep vermagic
+          modinfo "$RTLKO" | grep vermagic
           echo "Kernel version: $KVER"
 
       # ============================================================
