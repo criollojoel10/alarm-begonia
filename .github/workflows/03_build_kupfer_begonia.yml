@@ -260,7 +260,7 @@ jobs:
           help() { echo "Firmware search path"; }
           FWSI
 
-          chmod 755 mnt/usr/lib/initcpio/hooks/*.sh mnt/usr/lib/initcpio/hooks/rootfsdetect mnt/usr/lib/initcpio/install/*
+          sudo chmod 755 mnt/usr/lib/initcpio/hooks/rootfsdetect mnt/usr/lib/initcpio/install/rootfsdetect mnt/usr/lib/initcpio/install/firmwaresearchpath
 
       # ============================================================
       # Create Kupfer mkinitcpio config
