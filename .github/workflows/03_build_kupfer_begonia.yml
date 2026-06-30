@@ -508,16 +508,18 @@ jobs:
           echo "DTB: $DTB_SIZE bytes"
           echo "Cmdline: $CMDLINE"
 
-          # Instalar mkbootimg via pip (apt mkbootimg en 24.04 falla sin python3-gki)
-          pip3 install mkbootimg --break-system-packages 2>&1 || \
-          pip3 install mkbootimg 2>&1 || \
-          { echo "ERROR: mkbootimg install failed"; exit 1; }
+          # Instalar mkbootimg via apt (con recommends para python3-gki)
+          sudo apt-get install -y -qq mkbootimg 2>&1 || {
+            echo "WARNING: apt mkbootimg failed, trying pip..."
+            pip3 install mkbootimg --break-system-packages 2>&1 || \
+            { echo "ERROR: no mkbootimg disponible"; exit 1; }
+          }
 
-          # Usar python3 -m mkbootimg para invocar el modulo instalado por pip
-          python3 -c 'import mkbootimg; print("mkbootimg OK")' 2>&1 || \
-          { echo "ERROR: mkbootimg module not importable"; exit 1; }
+          # Verificar que mkbootimg funciona
+          mkbootimg --help >/dev/null 2>&1 || \
+          { echo "ERROR: mkbootimg not functional"; exit 1; }
 
-          python3 -m mkbootimg \
+          mkbootimg \
             --kernel "$KERNEL" \
             --ramdisk "$INITRAMFS" \
             --cmdline "$CMDLINE" \
@@ -531,7 +533,7 @@ jobs:
             --dtb "$DTB_FILE" \
             --os_version 23.0.0 \
             --os_patch_level 2026-06 \
-            -o boot-kupfer-begonia.img
+            --output boot-kupfer-begonia.img
 
           echo "=== boot-kupfer-begonia.img ==="
           ls -lh boot-kupfer-begonia.img
