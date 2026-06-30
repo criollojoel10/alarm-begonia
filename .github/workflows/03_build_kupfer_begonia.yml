@@ -42,6 +42,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v9
         with:
           name: pmos-base-begonia
+          path: pmos-base
           workflow: 01_build_pmos_base.yml
           workflow_conclusion: success
           workflow_search: true
@@ -49,20 +50,36 @@ jobs:
           repo: criollojoel10/alarm-begonia
         continue-on-error: true
 
-      # Fallback: download from nightly release
-      - name: Fallback download from nightly
+      # Fallback: try to find any boot.img from previous runs
+      - name: Fallback — find boot.img from other artifacts
         if: failure()
         run: |
+          echo "⚠️ No artifact from workflow 01, trying alternative sources..."
           mkdir -p pmos-base
-          echo "⚠️ No artifact, using fallback..."
+          # Try downloading from nightly release directly
+          python3 -c "
+          import urllib.request, json
+          with open('/tmp/gh_token', 'w') as f:
+              pass
+          " 2>/dev/null || true
+          # Check if there's a nightly release with a boot.img
+          curl -sL -o boot-nightly.img \
+            'https://github.com/criollojoel10/alarm-begonia/releases/download/nightly/boot-begonia-arch.img' \
+            2>/dev/null && {
+            echo 'Downloaded boot.img from nightly release'
+            cp boot-nightly.img pmos-base/boot.img
+          } || {
+            echo 'No boot.img found from any source — will extract from chroot'
+          }
 
       - name: Check pmOS base
         run: |
+          echo "=== pmos-base contents ==="
           ls -lh pmos-base/ 2>/dev/null || mkdir -p pmos-base
           if [ -f pmos-base/boot.img ]; then
-            echo "boot.img found: $(ls -lh pmos-base/boot.img | awk '{print $5}')"
+            echo "✅ boot.img found: $(ls -lh pmos-base/boot.img | awk '{print $5}')"
           else
-            echo "⚠️ No boot.img in artifact, will generate from scratch"
+            echo "⚠️ No boot.img in artifact — will try to extract kernel from chroot"
           fi
 
       - name: Download Arch rootfs
@@ -156,71 +173,27 @@ jobs:
           sudo mkdir -p mnt/usr/lib/initcpio/hooks
           sudo mkdir -p mnt/usr/lib/initcpio/install
 
-          # Kupfer functions
-          sudo tee mnt/usr/lib/initcpio/hooks/kupfer-functions.sh > /dev/null << 'HOOKS'
-          # Kupfer helper functions for initramfs
-
-          scan_partitions() {
-              local partition="$1"
-              local target="$2"
-
-              # Check if partition exists
-              [ -b "$partition" ] || return 1
-
-              # Try to find filesystem with matching label
-              local found_label
-              found_label=$(blkid -o value -s LABEL "$partition" 2>/dev/null)
-              if [ "$found_label" = "${target#LABEL=}" ]; then
-                  RESULT="$partition"
-                  return 0
-              fi
-
-              # For subpartitions (in userdata), scan inside
-              SUBPARTNUMBER=2
-              local subpart
-              for _ in 1 2; do
-                  if losetup -f 2>/dev/null; then
-                      LOOPDEV=$(losetup -f --show -P "$partition" 2>/dev/null) || continue
-                      for subdev in "${LOOPDEV}p"*; do
-                          [ -b "$subdev" ] || continue
-                          found_label=$(blkid -o value -s LABEL "$subdev" 2>/dev/null)
-                          if [ "$found_label" = "${target#LABEL=}" ]; then
-                              RESULT="$subdev"
-                              return 0
-                          fi
-                      done
-                      losetup -d "$LOOPDEV" 2>/dev/null || true
-                      break
-                  fi
-              done
-              return 1
-          }
-          HOOKS
-
-          # rootfsdetect hooks
+          # Kupfer rootfsdetect hook (inline — no separate functions file needed)
+          # This hook runs during early boot to find root partition by label
           sudo tee mnt/usr/lib/initcpio/hooks/rootfsdetect > /dev/null << 'RFSH'
-          #!/usr/bin/ash
           run_hook() {
-            source /usr/lib/initcpio/hooks/kupfer-functions.sh 2>/dev/null || true
             export rwopt=rw
             export init=/sbin/init
 
-            # If root is already set (via cmdline), use it
+            # If root is already set (via cmdline) and it's a block device, use it
             if [ -n "$root" ] && [ "$root" != "LABEL=kupfer_root" ]; then
               [ -b "$root" ] && return 0
             fi
 
-            # Search for kupfer_root label
-            echo "Kupfer: Searching for kupfer_root partition..."
-            for _root in "/dev/disk/by-label/kupfer_root" ""; do
-              if [ -e "$_root" ]; then
-                export root="$_root"
-                echo "Kupfer: Found root at $root"
-                return 0
-              fi
-            done
+            # Try /dev/disk/by-label first
+            echo "Kupfer: Searching for kupfer_root..."
+            if [ -e "/dev/disk/by-label/kupfer_root" ]; then
+              export root="/dev/disk/by-label/kupfer_root"
+              echo "Kupfer: Found root at $root"
+              return 0
+            fi
 
-            # Brute force scan
+            # Brute force scan for label
             for part in /dev/sd?[0-9]* /dev/mmcblk[0-9]p* /dev/vd?[0-9]*; do
               [ -b "$part" ] || continue
               label=$(blkid -o value -s LABEL "$part" 2>/dev/null)
@@ -231,36 +204,23 @@ jobs:
               fi
             done
 
-            echo "Kupfer: WARNING - kupfer_root not found, using cmdline root"
+            echo "Kupfer: WARNING - kupfer_root not found"
           }
           RFSH
 
+          # Install hook — tells mkinitcpio to bundle rootfsdetect
           sudo tee mnt/usr/lib/initcpio/install/rootfsdetect > /dev/null << 'RFSI'
-          #!/usr/bin/ash
           build() {
             add_runscript
+            add_binary /usr/bin/blkid /usr/bin/blkid
+            add_binary /sbin/blkid /sbin/blkid 2>/dev/null || true
           }
           help() {
             echo "Detect root partition with label kupfer_root"
           }
           RFSI
 
-          # firmwaresearchpath hook
-          sudo tee mnt/usr/lib/initcpio/hooks/firmwaresearchpath > /dev/null << 'FWSH'
-          run_hook() {
-            # No-op for now (firmware loaded later by udev)
-            return 0
-          }
-          FWSH
-
-          sudo tee mnt/usr/lib/initcpio/install/firmwaresearchpath > /dev/null << 'FWSI'
-          build() {
-            add_runscript
-          }
-          help() { echo "Firmware search path"; }
-          FWSI
-
-          sudo chmod 755 mnt/usr/lib/initcpio/hooks/rootfsdetect mnt/usr/lib/initcpio/install/rootfsdetect mnt/usr/lib/initcpio/install/firmwaresearchpath
+          sudo chmod 755 mnt/usr/lib/initcpio/hooks/rootfsdetect mnt/usr/lib/initcpio/install/rootfsdetect
 
       # ============================================================
       # Create Kupfer mkinitcpio config
@@ -371,88 +331,138 @@ jobs:
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
           echo "Generating initramfs for kernel $KVER..."
 
-          sudo chroot mnt /bin/bash -c '
-            KVER=$(ls /usr/lib/modules/ | head -1)
-            echo "Kernel in chroot: $KVER"
-            # Generate preset
-            mkdir -p /etc/mkinitcpio.d
-            cat > /etc/mkinitcpio.d/linux-kupfer.preset << PRESET
-            ALL_config="/etc/mkinitcpio.conf"
-            PRESET_kver="${KVER}"
-            PRESET_kver="${KVER}"
-            ALL_kver="${KVER}"
-            default_image="/boot/initramfs-kupfer.img"
-            default_options=""
-            fallback_image="/boot/initramfs-kupfer-fallback.img"
-            fallback_options="-S autodetect"
-            PRESET
+          # We cannot use heredoc inside chroot, so write the script first
+          sudo tee mnt/tmp/gen-initramfs.sh > /dev/null << 'SCRIPT'
+          #!/bin/bash
+          KVER=$(ls /usr/lib/modules/ | head -1)
+          echo "Kernel in chroot: $KVER"
+          
+          # Direct mkinitcpio call (hooks already in config)
+          mkinitcpio -k "$KVER" -g /boot/initramfs-kupfer.img 2>&1 || (
+            echo "Direct call failed, trying with explicit hooks..."
+            # Use -A to add our hook to the defaults
+            mkinitcpio -k "$KVER" -g /boot/initramfs-kupfer.img \
+              -A rootfsdetect 2>&1
+          )
+          
+          ls -lh /boot/initramfs-kupfer.img
+          SCRIPT
+          sudo chmod 755 mnt/tmp/gen-initramfs.sh
 
-            # Generate the initramfs
-            mkinitcpio -p linux-kupfer 2>&1 || {
-              echo "Preset failed, trying direct..."
-              mkinitcpio -k "$KVER" -g /boot/initramfs-kupfer.img \
-                -H base udev autodetect modconf block rootfsdetect filesystems keyboard fsck 2>&1
-            }
-          '
+          sudo chroot mnt /bin/bash /tmp/gen-initramfs.sh
 
-          echo "Initramfs generated:"
-          ls -lh mnt/boot/initramfs-kupfer.img 2>/dev/null || ls -lh mnt/boot/initramfs-*.img
+          echo "Initramfs result:"
+          ls -lh mnt/boot/initramfs-kupfer.img 2>/dev/null || echo "❌ No initramfs found at expected path"
+          ls -lh mnt/boot/initramfs-*.img 2>/dev/null || true
 
       # ============================================================
       # Build Kupfer boot.img
       # Using pmOS kernel (Image.gz) + DTB + Kupfer initramfs
       # ============================================================
-      - name: Build boot.img (from pmOS kernel + DTB + Kupfer initramfs)
+      - name: Build boot.img (Kupfer kernel + initramfs)
         run: |
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          CMDLINE=$(cat boot-build/cmdline.txt)
-          echo "Cmdline: $CMDLINE"
-
-          PMOS_BOOT="pmos-base/boot.img"
-
-          if [ ! -f "$PMOS_BOOT" ]; then
-            echo "❌ No pmOS boot.img found"
+          if [ -z "$KVER" ]; then
+            echo "❌ No kernel modules found"
             exit 1
           fi
+          echo "Kernel: $KVER"
+
+          CMDLINE=$(cat boot-build/cmdline.txt)
+          echo "Cmdline: $CMDLINE"
 
           # Find initramfs we built
           INITRAMFS=$(find mnt/boot -name "initramfs-kupfer.img" | head -1)
           [ -z "$INITRAMFS" ] && INITRAMFS=$(find mnt/boot -name "initramfs-*.img" | head -1)
-          echo "Initramfs: $INITRAMFS ($(ls -lh $INITRAMFS | awk '{print $5}'))"
+          [ -z "$INITRAMFS" ] && INITRAMFS=$(find mnt/boot -name "initramfs*" | head -1)
+          echo "Initramfs: $INITRAMFS"
 
           if [ ! -f "$INITRAMFS" ]; then
-            echo "❌ No initramfs found"
+            echo "❌ No initramfs found — was mkinitcpio run?"
+            ls -la mnt/boot/ 2>/dev/null || echo "mnt/boot/ not found"
             exit 1
           fi
+          echo "Initramfs size: $(ls -lh $INITRAMFS | awk '{print $5}')"
 
-          # Use Python repacker: replace pmOS initramfs with Kupfer mkinitcpio initramfs
-          python3 scripts/repack-bootimg.py \
-            "$PMOS_BOOT" \
-            "$INITRAMFS" \
-            "$CMDLINE" \
-            boot-kupfer-begonia.img
+          PMOS_BOOT="pmos-base/boot.img"
+
+          if [ -f "$PMOS_BOOT" ]; then
+            # Route A: repack existing pmOS boot.img (replace initramfs + cmdline)
+            echo "Route A: Repacking from pmOS boot.img"
+            python3 scripts/repack-bootimg.py \
+              "$PMOS_BOOT" \
+              "$INITRAMFS" \
+              "$CMDLINE" \
+              boot-kupfer-begonia.img
+          else
+            # Route B: build boot.img from scratch (kernel from chroot + DTB)
+            echo "Route B: Building boot.img from chroot"
+
+            # Find kernel (vmlinuz/Image) in chroot
+            VMLINUZ=$(find mnt/boot -name "vmlinuz*" | head -1)
+            [ -z "$VMLINUZ" ] && VMLINUZ=$(find mnt/usr/lib/modules/$KVER -name "vmlinuz*" -o -name "Image*" | head -1)
+            [ -z "$VMLINUZ" ] && VMLINUZ=$(find mnt -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1)
+            echo "Kernel: $VMLINUZ"
+
+            if [ -z "$VMLINUZ" ] || [ ! -f "$VMLINUZ" ]; then
+              echo "❌ No kernel image found"
+              exit 1
+            fi
+
+            # Find DTB
+            DTB=$(find mnt/usr/lib/modules/$KVER/dtbs -name "mt6785*" -o -name "begonia*" | head -1)
+            [ -z "$DTB" ] && DTB=$(find mnt/usr/lib/modules/$KVER/dtbs -name "*.dtb" 2>/dev/null | head -1)
+            echo "DTB: $DTB"
+
+            # Install mkbootimg in a temp manner
+            sudo apt-get install -y -qq android-sdk-libsparse-utils 2>/dev/null || true
+            pip3 install mkbootimg 2>/dev/null || true
+
+            # Append DTB to kernel if exists
+            if [ -f "$DTB" ]; then
+              cat "$VMLINUZ" "$DTB" > /tmp/kernel-dtb.img
+              KERNEL_PATH="/tmp/kernel-dtb.img"
+              echo "DTB appended to kernel"
+            else
+              KERNEL_PATH="$VMLINUZ"
+            fi
+
+            # Build boot.img
+            python3 -m mkbootimg \
+              --kernel "$KERNEL_PATH" \
+              --ramdisk "$INITRAMFS" \
+              --cmdline "$CMDLINE" \
+              --base 0x0 \
+              --kernel_offset 0x00008000 \
+              --ramdisk_offset 0x01000000 \
+              --second_offset 0x00f00000 \
+              --tags_offset 0x00000100 \
+              --pagesize 2048 \
+              --os_version 23.0.0 \
+              --os_patch_level 2026-06 \
+              -o boot-kupfer-begonia.img 2>&1 || {
+              # Fallback: use the repacker from a dummy boot.img
+              echo "mkbootimg failed, using Python repacker from nightly boot.img..."
+              curl -sL -o /tmp/nightly-boot.img \
+                'https://github.com/criollojoel10/alarm-begonia/releases/download/nightly/boot-begonia-arch.img' && \
+                python3 scripts/repack-bootimg.py /tmp/nightly-boot.img "$INITRAMFS" "$CMDLINE" boot-kupfer-begonia.img || {
+                echo "❌ All methods failed to create boot.img"
+                exit 1
+              }
+            }
+          fi
 
           echo "=== boot.img ==="
           ls -lh boot-kupfer-begonia.img
 
-          # Verify
+          # Verify cmdline
           python3 -c "
-          with open('boot-kupfer-begonia.img', 'rb') as f:
-              data = f.read(576)
-          c = data[64:576].rstrip(b'\x00').decode('ascii', 'replace')
-          print(f'Cmdline: {c}')
-          print(f'root= present: {\"root=\" in c} ✅')
-          print(f'kupfer label: {\"kupfer\" in c} ✅')
-          r_size = struct.unpack('<I', data[16:20])[0]
-          print(f'Ramdisk: {r_size:,} B')
-          ''
-          " 2>/dev/null || python3 -c "
           import struct
           with open('boot-kupfer-begonia.img', 'rb') as f:
               data = f.read(576)
           c = data[64:576].rstrip(b'\x00').decode('ascii', 'replace')
           print(f'Cmdline: {c}')
-          print(f'root= present: {\"root=\" in c} ✅')
+          print(f'kupfer_root: {\"kupfer_root\" in c} ✅')
           r_size = struct.unpack('<I', data[16:20])[0]
           print(f'Ramdisk: {r_size:,} B')
           "
