@@ -110,7 +110,11 @@ jobs:
           if [ -f pmos-base/modules-begonia.tar.gz ]; then
             sudo tar -xzf pmos-base/modules-begonia.tar.gz -C mnt/usr/lib/ 2>/dev/null || true
           fi
-          KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)
+          # Prefer pmOS kernel (6.x) over Arch ARM kernel (7.x)
+          KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | grep '^6\.' | head -1)
+          if [ -z "$KVER" ]; then
+            KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)
+          fi
           if [ -n "$KVER" ]; then
             echo "Kernel: $KVER"
             echo "KVER=$KVER" >> $GITHUB_ENV
@@ -281,14 +285,31 @@ jobs:
       - name: Prepare kernel build tree (with RTL8XXXU_UNTESTED)
         run: |
           wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
-          # Enable CONFIG_RTL8XXXU_UNTESTED — includes USB ID 2357:0107
-          sed -i 's/^# CONFIG_RTL8XXXU_UNTESTED is not set/CONFIG_RTL8XXXU_UNTESTED=y/' \
-            linux-kernel/.config
-          grep RTL8XXXU_UNTESTED linux-kernel/.config || \
-            echo "CONFIG_RTL8XXXU_UNTESTED=y" >> linux-kernel/.config
+          # Enable rtl8xxxu driver chain (3 levels):
+          #   WLAN_VENDOR_REALTEK (parent) → RTL8XXXU (driver) → UNTESTED (USB IDs)
           cd linux-kernel
+          # Disable CONFIG_RTL8XXXU first if it's builtin (=y), we need =m for module
+          sed -i 's/^CONFIG_RTL8XXXU=y/# CONFIG_RTL8XXXU is not set/' .config
+          # Enable everything
+          for line in \
+            "CONFIG_WLAN_VENDOR_REALTEK=y" \
+            "CONFIG_RTL8XXXU=m" \
+            "CONFIG_RTL8XXXU_UNTESTED=y"; do
+            opt="${line%%=*}"
+            sed -i "s/^# ${opt} is not set/${line}/" .config 2>/dev/null || true
+            grep -q "^${line}" .config || echo "$line" >> .config
+          done
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
-          grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config && echo "✅ UNTESTED=y preserved" || echo "⚠️ UNTESTED=y lost"
+          echo "=== RTL config verification ==="
+          grep -E "CONFIG_WLAN_VENDOR_REALTEK=|CONFIG_RTL8XXXU=." .config | head -3
+          grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config && echo "✅ UNTESTED=y" || echo "⚠️ UNTESTED lost, adding after olddefconfig..."
+          # If olddefconfig dropped it (depends on unmet), force-add
+          grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config || {
+            echo "CONFIG_RTL8XXXU_UNTESTED=y" >> .config
+            # Run olddefconfig again with minimal fix
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -2
+            grep -q "CONFIG_RTL8XXXU_UNTESTED=y" .config && echo "  ✅ UNTESTED=y after retry" || echo "  ⚠️ STILL lost"
+          }
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
 
       - name: Build rtl8xxxu module (in-kernel, with UNTESTED)
@@ -303,15 +324,31 @@ jobs:
 
       - name: Install rtl8xxxu module + config persistente
         run: |
-          KVER=$(ls mnt/usr/lib/modules/ | head -1)
-          MODDIR="mnt/usr/lib/modules/$KVER/kernel/drivers/net/wireless/realtek/rtl8xxxu"
-          if [ -f linux-kernel/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
-            sudo cp linux-kernel/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko "$MODDIR/"
+          # Find pmOS kernel (6.x), NOT the Arch ARM kernel (7.x)
+          KVER=$(ls mnt/usr/lib/modules/ | grep '^6\.' | head -1)
+          if [ -z "$KVER" ]; then
+            KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          fi
+          echo "Target kernel: $KVER"
+          MODBASE="mnt/usr/lib/modules/$KVER/kernel/drivers/net/wireless/realtek/rtl8xxxu"
+
+          # Find the .ko (might be in kernel src dir or its subdirs)
+          RTLKO=$(find linux-kernel/drivers/net/wireless/realtek/rtl8xxxu -name "*.ko" | head -1)
+          
+          if [ -f "$RTLKO" ]; then
+            sudo mkdir -p "$MODBASE"
+            sudo cp "$RTLKO" "$MODBASE/"
             sudo depmod -b mnt "$KVER"
-            echo "✅ rtl8xxxu.ko installed (with CONFIG_RTL8XXXU_UNTESTED=y)"
+            echo "✅ rtl8xxxu.ko installed (size: $(ls -lh $RTLKO | awk '{print $5}'))"
+            echo "=== Vermagic check ==="
+            modinfo "$RTLKO" | grep vermagic
           else
-            echo "❌ rtl8xxxu.ko not found"
-            find linux-kernel/drivers/net/wireless/realtek/rtl8xxxu -name "*.ko" 2>/dev/null || true
+            echo "❌ rtl8xxxu.ko not produced — checking build dir:"
+            find linux-kernel/drivers/net/wireless/realtek/rtl8xxxu -type f | head -20
+            echo "---
+If no .ko was built, CONFIG_RTL8XXXU is not set to 'm'.
+Check step 'Prepare kernel build tree' output.
+---"
             exit 1
           fi
           # Blacklist broken 8192eu (struct module mismatch con kernel 6.16.4)
@@ -348,7 +385,8 @@ jobs:
       # ============================================================
       - name: Generate initramfs
         run: |
-          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          KVER=$(ls mnt/usr/lib/modules/ | grep '^6\.' | head -1)
+          [ -z "$KVER" ] && KVER=$(ls mnt/usr/lib/modules/ | head -1)
           echo "Generating initramfs for kernel $KVER..."
 
           # We cannot use heredoc inside chroot, so write the script first
@@ -417,7 +455,8 @@ jobs:
           else
             # Route B: build boot.img from kernel + DTB in chroot (fallback)
             echo "Route B: Building boot.img from chroot"
-            KVER=$(ls mnt/usr/lib/modules/ | head -1)
+            KVER=$(ls mnt/usr/lib/modules/ | grep '^6\.' | head -1)
+            [ -z "$KVER" ] && KVER=$(ls mnt/usr/lib/modules/ | head -1)
 
             # Find kernel (sudo to read if needed, then copy)
             sudo find mnt -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1 | xargs -r sudo cp -t /tmp/ 2>/dev/null || true
