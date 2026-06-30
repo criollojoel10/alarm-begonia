@@ -345,10 +345,8 @@ jobs:
           else
             echo "❌ rtl8xxxu.ko not produced — checking build dir:"
             find linux-kernel/drivers/net/wireless/realtek/rtl8xxxu -type f | head -20
-            echo "---
-If no .ko was built, CONFIG_RTL8XXXU is not set to 'm'.
-Check step 'Prepare kernel build tree' output.
----"
+            echo "=> If no .ko was built, CONFIG_RTL8XXXU is not set to 'm'."
+            echo "=> Check step 'Prepare kernel build tree' output."
             exit 1
           fi
           # Blacklist broken 8192eu (struct module mismatch con kernel 6.16.4)
