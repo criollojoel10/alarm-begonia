@@ -256,8 +256,10 @@ jobs:
           cat > /tmp/mkinitcpio.conf << 'MKINIT'
           # mkinitcpio.conf — Kupfer Linux on begonia
           # NOTA: sin autodetect — CI runner no tiene hardware begonia
-          MODULES=(ext4 mmc_block)
-          BINARIES=(/usr/bin/blkid)
+          # Almacenamiento: mtk_sd (eMMC), ufshcd* (UFS begonia),
+          # scsi_mod + sd_mod por si acaso
+          MODULES=(ext4 scsi_mod sd_mod mmc_block mtk_sd ufshcd_core ufshcd_pltfrm ufs_mediatek)
+          BINARIES=(/usr/bin/blkid /usr/bin/udevadm)
           FILES=()
           HOOKS=(base udev modconf block rootfsdetect filesystems fsck)
           COMPRESSION="gzip"
@@ -276,6 +278,15 @@ jobs:
 
           echo "mkinitcpio configured:"
           cat mnt/etc/mkinitcpio.conf
+
+      - name: Verify storage modules in initramfs
+        run: |
+          sudo chroot mnt /bin/bash -c '
+            KVER=$(find /usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | grep "^6\." | head -1)
+            echo "KVER=$KVER"
+            echo "=== Storage modules found ==="
+            find /usr/lib/modules/$KVER -iname "*ufs*" -o -iname "*mmc*" -o -iname "*sd_mod*" -o -iname "*msdc*" 2>/dev/null | sort
+          '
 
       # ============================================================
       # Install Kupfer deviceinfo
@@ -439,16 +450,16 @@ jobs:
       - name: Copy boot files out of chroot
         run: |
           mkdir -p boot-out
+          # Initramfs
           sudo cp mnt/boot/initramfs-kupfer.img boot-out/initramfs-kupfer.img 2>/dev/null || true
-          sudo find mnt/boot/ -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1 | xargs -r sudo cp -t boot-out/ 2>/dev/null || true
-          # Copiar DTB desde módulos pmOS
-          KVER=${KVER:-$(find mnt/usr/lib/modules -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | grep '^6\.' | head -1)}
-          if [ -n "$KVER" ]; then
-            DTB_SRC=$(sudo find mnt/usr/lib/modules/$KVER/dtbs -name "*.dtb" 2>/dev/null | head -1)
-            if [ -n "$DTB_SRC" ]; then
-              sudo cp "$DTB_SRC" boot-out/mt6785-xiaomi-begonia.dtb
-              echo "✅ DTB copied: $DTB_SRC"
-            fi
+          # DTB desde pmos-base (artifact de 01_build_pmos_base)
+          DTB_FILE=$(find pmos-base/dtbs -name "*begonia*" 2>/dev/null | head -1)
+          if [ -z "$DTB_FILE" ]; then
+            DTB_FILE=$(find pmos-base -name "*.dtb" 2>/dev/null | head -1)
+          fi
+          if [ -n "$DTB_FILE" ]; then
+            cp "$DTB_FILE" boot-out/mt6785-xiaomi-begonia.dtb
+            echo "DTB: $DTB_FILE ($(ls -lh $DTB_FILE | awk '{print $5}'))"
           fi
           sudo chmod 644 boot-out/* 2>/dev/null || true
           echo "=== boot-out ==="
@@ -458,74 +469,62 @@ jobs:
       # Build Kupfer boot.img
       # Fix #6: preservar DTB + header v2, verificar tamaño contra original
       # ============================================================
-      - name: Build boot.img (Kupfer kernel + initramfs)
+      - name: Build boot.img (mkbootimg directo con sanity check)
         run: |
           CMDLINE=$(cat boot-build/cmdline.txt)
-          echo "Cmdline: $CMDLINE"
-
           INITRAMFS="boot-out/initramfs-kupfer.img"
-          if [ ! -f "$INITRAMFS" ]; then
-            echo "No initramfs found at boot-out/"
-            exit 1
-          fi
-          echo "Initramfs: $INITRAMFS ($(ls -lh $INITRAMFS | awk '{print $5}'))"
-
           PMOS_BOOT="pmos-base/boot.img"
           DTB_FILE="boot-out/mt6785-xiaomi-begonia.dtb"
 
-          if [ -f "$PMOS_BOOT" ]; then
-            echo "=== pmOS original boot.img size ==="
-            ls -lh "$PMOS_BOOT"
-            echo "Route A: Repacking from pmOS boot.img"
-            python3 scripts/repack-bootimg.py \
-              "$PMOS_BOOT" "$INITRAMFS" "$CMDLINE" \
-              boot-kupfer-begonia.img 2>&1
-            echo "=== Repacked boot.img size ==="
-            ls -lh boot-kupfer-begonia.img || echo "(not created)"
-          fi
+          [ -f "$INITRAMFS" ] || { echo "ERROR: missing initramfs"; exit 1; }
+          [ -f "$PMOS_BOOT" ] || { echo "ERROR: missing pmOS boot.img"; exit 1; }
+          [ -f "$DTB_FILE" ] || { echo "ERROR: missing begonia DTB"; exit 1; }
 
-          # Route B: mkbootimg directo
-          if [ ! -f "boot-kupfer-begonia.img" ] || [ ! -s "boot-kupfer-begonia.img" ]; then
-            echo "Route B: Building boot.img from scratch with mkbootimg"
-            KVER=${KVER:-$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)}
-            VMLINUZ=$(sudo find mnt/boot/ mnt/usr/lib/modules -name "vmlinuz*" -o -name "Image*" 2>/dev/null | head -1)
-            if [ -z "$VMLINUZ" ] && [ -f "$PMOS_BOOT" ]; then
-              echo "Extracting kernel from pmOS boot.img..."
-              python3 scripts/extract-kernel.py "$PMOS_BOOT" boot-out/kernel.bin
-              VMLINUZ="boot-out/kernel.bin"
-            fi
-            if [ -z "$VMLINUZ" ] || [ ! -f "$VMLINUZ" ]; then
-              echo "No kernel image found"
-              exit 1
-            fi
-            echo "Kernel: $VMLINUZ ($(ls -lh $VMLINUZ | awk '{print $5}'))"
-            pip3 install mkbootimg 2>/dev/null || true
-            python3 -m mkbootimg \
-              --kernel "$VMLINUZ" \
-              --ramdisk "$INITRAMFS" \
-              --cmdline "$CMDLINE" \
-              --base 0x0 \
-              --kernel_offset 0x00008000 \
-              --ramdisk_offset 0x01000000 \
-              --second_offset 0x00f00000 \
-              --tags_offset 0x00000100 \
-              --pagesize 2048 \
-              --header_version 2 \
-              $( [ -f "$DTB_FILE" ] && echo "--dtb $DTB_FILE" ) \
-              --os_version 23.0.0 \
-              --os_patch_level 2026-06 \
-              -o boot-kupfer-begonia.img 2>&1 || {
-                echo "mkbootimg failed"
-                exit 1
-              }
-          fi
+          echo "Extracting kernel from pmOS boot.img..."
+          python3 scripts/extract-kernel.py "$PMOS_BOOT" boot-out/kernel.bin
+          KERNEL="boot-out/kernel.bin"
+          [ -f "$KERNEL" ] || { echo "ERROR: kernel extraction failed"; exit 1; }
 
-          echo "=== boot.img ==="
+          echo "Kernel: $(ls -lh "$KERNEL" | awk '{print $5}')"
+          echo "Initramfs: $(ls -lh "$INITRAMFS" | awk '{print $5}')"
+          echo "DTB: $(ls -lh "$DTB_FILE" | awk '{print $5}')"
+
+          pip3 install mkbootimg 2>/dev/null || true
+
+          python3 -m mkbootimg \
+            --kernel "$KERNEL" \
+            --ramdisk "$INITRAMFS" \
+            --cmdline "$CMDLINE" \
+            --base 0x0 \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 \
+            --second_offset 0x00f00000 \
+            --tags_offset 0x00000100 \
+            --pagesize 2048 \
+            --header_version 2 \
+            --dtb "$DTB_FILE" \
+            --os_version 23.0.0 \
+            --os_patch_level 2026-06 \
+            -o boot-kupfer-begonia.img 2>&1 || { echo "mkbootimg failed"; exit 1; }
+
+          echo "=== boot-kupfer-begonia.img ==="
           ls -lh boot-kupfer-begonia.img
-          python3 scripts/verify-bootimg.py boot-kupfer-begonia.img
-          if [ -f "$PMOS_BOOT" ]; then
-            python3 scripts/compare-bootimg.py "$PMOS_BOOT" boot-kupfer-begonia.img
+
+          # Sanity check: boot.img debe ser >= kernel + initramfs
+          KERNEL_SIZE=$(stat -c%s "$KERNEL")
+          INIT_SIZE=$(stat -c%s "$INITRAMFS")
+          BOOT_SIZE=$(stat -c%s boot-kupfer-begonia.img)
+          MIN_SIZE=$((KERNEL_SIZE + INIT_SIZE))
+          echo "Kernel size: $KERNEL_SIZE"
+          echo "Initramfs size: $INIT_SIZE"
+          echo "Boot size: $BOOT_SIZE"
+          echo "Min expected (kernel+initramfs): $MIN_SIZE"
+          if [ "$BOOT_SIZE" -lt "$MIN_SIZE" ]; then
+            echo "ERROR: boot.img smaller than kernel+initramfs - truncated/invalid"
+            exit 1
           fi
+
+          python3 scripts/verify-bootimg.py boot-kupfer-begonia.img
 
       # ============================================================
       # Enable services & user
