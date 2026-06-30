@@ -1,0 +1,527 @@
+name: "03 — Build Kupfer Linux for begonia"
+
+on:
+  workflow_dispatch:
+    inputs:
+      rootfs_size:
+        description: "Rootfs image size (GB)"
+        default: "8"
+
+permissions:
+  contents: write
+
+env:
+  ARCH_ROOTFS_URL: "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+  RTL8192EU_REPO: "https://github.com/clnhub/rtl8192eu-linux.git"
+  KERNEL_REPO: "https://gitlab.postmarketos.org/mt6785-mainline/linux.git"
+  KERNEL_TAG: "6.16.4-r0"
+  KERNEL_CONFIG_URL: "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/linux-postmarketos-mediatek-mt6785/config-postmarketos-mediatek-mt6785.aarch64"
+  DEVICEINFO_URL: "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/device-xiaomi-begonia/deviceinfo"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libarchive-tools xz-utils zstd e2fsprogs \
+            qemu-user-static binfmt-support \
+            gcc-aarch64-linux-gnu python3 \
+            --no-install-recommends
+
+      # ============================================================
+      # Get pmOS base artifact (kernel + modules + DTB from build #22)
+      # ============================================================
+      - name: Download pmOS base
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          name: pmos-base-begonia
+          workflow: 01_build_pmos_base.yml
+          workflow_conclusion: success
+          workflow_search: true
+          check_artifacts: true
+          repo: criollojoel10/alarm-begonia
+        continue-on-error: true
+
+      # Fallback: download from nightly release
+      - name: Fallback download from nightly
+        if: failure()
+        run: |
+          mkdir -p pmos-base
+          echo "⚠️ No artifact, using fallback..."
+
+      - name: Check pmOS base
+        run: |
+          ls -lh pmos-base/ 2>/dev/null || mkdir -p pmos-base
+          if [ -f pmos-base/boot.img ]; then
+            echo "boot.img found: $(ls -lh pmos-base/boot.img | awk '{print $5}')"
+          else
+            echo "⚠️ No boot.img in artifact, will generate from scratch"
+          fi
+
+      - name: Download Arch rootfs
+        run: |
+          wget -q --show-progress "${{ env.ARCH_ROOTFS_URL }}" -O arch-rootfs.tar.gz
+          ls -lh arch-rootfs.tar.gz
+
+      # ============================================================
+      # Create rootfs with label 'kupfer_root' (Kupfer convention)
+      # ============================================================
+      - name: Create and mount rootfs (kupfer_root)
+        run: |
+          truncate -s ${{ inputs.rootfs_size }}G rootfs.img
+          mkfs.ext4 -F -L kupfer_root rootfs.img
+          mkdir -p mnt
+          sudo mount rootfs.img mnt
+
+      - name: Extract Arch rootfs
+        run: |
+          sudo bsdtar -xpf arch-rootfs.tar.gz -C mnt
+          echo "Rootfs size:"
+          df -h mnt
+
+      # ============================================================
+      # Inject pmOS kernel modules + firmware
+      # ============================================================
+      - name: Inject kernel modules
+        run: |
+          if [ -f pmos-base/modules-begonia.tar.gz ]; then
+            sudo tar -xzf pmos-base/modules-begonia.tar.gz -C mnt/usr/lib/ 2>/dev/null || true
+          fi
+          KVER=$(ls mnt/usr/lib/modules/ 2>/dev/null | head -1)
+          if [ -n "$KVER" ]; then
+            echo "Kernel: $KVER"
+            echo "KVER=$KVER" >> $GITHUB_ENV
+          else
+            echo "⚠️ No kernel modules found"
+          fi
+
+      # ============================================================
+      # Generate boot.img CMDLINE for Kupfer
+      # Kupfer initramfs uses root=LABEL=kupfer_root (via rootfsdetect hook)
+      # No stale UUIDs. Keep pmOS cmdline extras.
+      # ============================================================
+      - name: Generate Kupfer cmdline
+        run: |
+          KUPFER_CMDLINE="root=LABEL=kupfer_root rw rootfstype=ext4 quiet splash plymouth.ignore-serial-consoles plymouth.prefer-fbcon bootopt=64S3,32N2,64N2"
+
+          # Get deviceinfo for DTB path
+          mkdir -p boot-build
+          echo "$KUPFER_CMDLINE" > boot-build/cmdline.txt
+          echo "Kupfer cmdline: $KUPFER_CMDLINE"
+
+      # ============================================================
+      # Chroot: install mkinitcpio + Kupfer hooks + config
+      # ============================================================
+      - name: Prepare chroot
+        run: |
+          sudo cp "$(which qemu-aarch64-static)" mnt/usr/bin/
+          sudo mount -t proc proc mnt/proc
+          sudo mount --bind /sys mnt/sys
+          sudo mount --bind /dev mnt/dev
+          sudo mount --bind /dev/pts mnt/dev/pts 2>/dev/null || true
+          sudo rm -f mnt/etc/resolv.conf
+          sudo bash -c 'cp /etc/resolv.conf mnt/etc/resolv.conf'
+          sudo sed -i '/\[options\]/a DisableSandbox' mnt/etc/pacman.conf 2>/dev/null || true
+
+      - name: Install base packages (pacman)
+        run: |
+          sudo chroot mnt /bin/bash -c '
+            pacman-key --init 2>&1
+            pacman-key --populate archlinuxarm 2>&1
+            pacman -Syu --noconfirm --needed \
+              busybox \
+              sudo vim nano git openssh rsync curl wget \
+              networkmanager iwd wpa_supplicant \
+              mkinitcpio mkinitcpio-busybox \
+              htop tmux 2>&1
+          '
+
+      # ============================================================
+      # Install Kupfer mkinitcpio hooks (custom port)
+      # These hooks replicate what mkinitcpio-kupfer-hooks does:
+      #   rootfsdetect — find root by LABEL=kupfer_root
+      #   kupfer-functions — helper functions
+      # ============================================================
+      - name: Install Kupfer initramfs hooks
+        run: |
+          # Create Kupfer directories
+          sudo mkdir -p mnt/etc/kupfer/mkinitcpio.conf.d
+          sudo mkdir -p mnt/usr/lib/initcpio/hooks
+          sudo mkdir -p mnt/usr/lib/initcpio/install
+
+          # Kupfer functions
+          sudo tee mnt/usr/lib/initcpio/hooks/kupfer-functions.sh > /dev/null << 'HOOKS'
+          # Kupfer helper functions for initramfs
+
+          scan_partitions() {
+              local partition="$1"
+              local target="$2"
+
+              # Check if partition exists
+              [ -b "$partition" ] || return 1
+
+              # Try to find filesystem with matching label
+              local found_label
+              found_label=$(blkid -o value -s LABEL "$partition" 2>/dev/null)
+              if [ "$found_label" = "${target#LABEL=}" ]; then
+                  RESULT="$partition"
+                  return 0
+              fi
+
+              # For subpartitions (in userdata), scan inside
+              SUBPARTNUMBER=2
+              local subpart
+              for _ in 1 2; do
+                  if losetup -f 2>/dev/null; then
+                      LOOPDEV=$(losetup -f --show -P "$partition" 2>/dev/null) || continue
+                      for subdev in "${LOOPDEV}p"*; do
+                          [ -b "$subdev" ] || continue
+                          found_label=$(blkid -o value -s LABEL "$subdev" 2>/dev/null)
+                          if [ "$found_label" = "${target#LABEL=}" ]; then
+                              RESULT="$subdev"
+                              return 0
+                          fi
+                      done
+                      losetup -d "$LOOPDEV" 2>/dev/null || true
+                      break
+                  fi
+              done
+              return 1
+          }
+          HOOKS
+
+          # rootfsdetect hooks
+          sudo tee mnt/usr/lib/initcpio/hooks/rootfsdetect > /dev/null << 'RFSH'
+          #!/usr/bin/ash
+          run_hook() {
+            source /usr/lib/initcpio/hooks/kupfer-functions.sh 2>/dev/null || true
+            export rwopt=rw
+            export init=/sbin/init
+
+            # If root is already set (via cmdline), use it
+            if [ -n "$root" ] && [ "$root" != "LABEL=kupfer_root" ]; then
+              [ -b "$root" ] && return 0
+            fi
+
+            # Search for kupfer_root label
+            echo "Kupfer: Searching for kupfer_root partition..."
+            for _root in "/dev/disk/by-label/kupfer_root" ""; do
+              if [ -e "$_root" ]; then
+                export root="$_root"
+                echo "Kupfer: Found root at $root"
+                return 0
+              fi
+            done
+
+            # Brute force scan
+            for part in /dev/sd?[0-9]* /dev/mmcblk[0-9]p* /dev/vd?[0-9]*; do
+              [ -b "$part" ] || continue
+              label=$(blkid -o value -s LABEL "$part" 2>/dev/null)
+              if [ "$label" = "kupfer_root" ]; then
+                export root="$part"
+                echo "Kupfer: Found kupfer_root at $part"
+                return 0
+              fi
+            done
+
+            echo "Kupfer: WARNING - kupfer_root not found, using cmdline root"
+          }
+          RFSH
+
+          sudo tee mnt/usr/lib/initcpio/install/rootfsdetect > /dev/null << 'RFSI'
+          #!/usr/bin/ash
+          build() {
+            add_runscript
+          }
+          help() {
+            echo "Detect root partition with label kupfer_root"
+          }
+          RFSI
+
+          # firmwaresearchpath hook
+          sudo tee mnt/usr/lib/initcpio/hooks/firmwaresearchpath > /dev/null << 'FWSH'
+          run_hook() {
+            # No-op for now (firmware loaded later by udev)
+            return 0
+          }
+          FWSH
+
+          sudo tee mnt/usr/lib/initcpio/install/firmwaresearchpath > /dev/null << 'FWSI'
+          build() {
+            add_runscript
+          }
+          help() { echo "Firmware search path"; }
+          FWSI
+
+          chmod 755 mnt/usr/lib/initcpio/hooks/*.sh mnt/usr/lib/initcpio/hooks/rootfsdetect mnt/usr/lib/initcpio/install/*
+
+      # ============================================================
+      # Create Kupfer mkinitcpio config
+      # ============================================================
+      - name: Configure mkinitcpio (Kupfer-style)
+        run: |
+          # Simple mkinitcpio.conf for Kupfer on begonia
+          cat > /tmp/mkinitcpio.conf << 'MKINIT'
+          # mkinitcpio.conf — Kupfer Linux on begonia
+          MODULES=(ext4 mmc_block)
+          BINARIES=(/usr/bin/blkid)
+          FILES=(/lib/firmware/regulatory.db)
+          HOOKS=(base udev autodetect modconf block rootfsdetect filesystems keyboard fsck)
+          COMPRESSION="zstd"
+          MKINITCPIO_BUSYBOX=1
+          MKINITCPIO_QUIET=1
+          MKINIT
+          sudo cp /tmp/mkinitcpio.conf mnt/etc/mkinitcpio.conf
+
+          # Device-specific config
+          sudo mkdir -p mnt/etc/kupfer/mkinitcpio.conf.d
+          cat > /tmp/begonia.conf << 'BEG'
+          MODULES+=(mtk_sd)
+          BINARIES+=(/usr/bin/losetup)
+          BEG
+          sudo cp /tmp/begonia.conf mnt/etc/kupfer/mkinitcpio.conf.d/begonia.conf
+
+          echo "mkinitcpio configured:"
+          cat mnt/etc/mkinitcpio.conf
+
+          echo "mkinitcpio configured:"
+          cat mnt/etc/mkinitcpio.conf | head -20
+
+      # ============================================================
+      # Install Kupfer deviceinfo
+      # ============================================================
+      - name: Install deviceinfo
+        run: |
+          wget -q "${{ env.DEVICEINFO_URL }}" -O /tmp/deviceinfo
+          sudo mkdir -p mnt/etc/kupfer
+          sudo cp /tmp/deviceinfo mnt/etc/kupfer/deviceinfo
+          echo "Deviceinfo installed:"
+          cat mnt/etc/kupfer/deviceinfo
+
+      # ============================================================
+      # Build RTL8192EU WiFi driver
+      # ============================================================
+      - name: Restore kernel source cache
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: linux-kernel
+          key: v1-kernel-6.16.4-r0
+
+      - name: Clone kernel source
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.KERNEL_TAG }} \
+            ${{ env.KERNEL_REPO }} linux-kernel 2>&1 | tail -3
+
+      - name: Prepare kernel build tree
+        run: |
+          wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
+          cd linux-kernel
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
+
+      - name: Build RTL8192EU
+        run: |
+          git clone --depth 1 ${{ env.RTL8192EU_REPO }} rtl8192eu-linux
+          cd rtl8192eu-linux
+          KSRC="${{ github.workspace }}/linux-kernel"
+          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
+          sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/' Makefile
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            KSRC="$KSRC" KBUILD_MODPOST_WARN=1 2>&1 | tail -10
+          ls -lh 8192eu.ko
+
+      - name: Install WiFi driver
+        run: |
+          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          MODDIR="mnt/usr/lib/modules/$KVER/extra"
+          sudo mkdir -p "$MODDIR"
+          sudo cp rtl8192eu-linux/8192eu.ko "$MODDIR/"
+          sudo depmod -b mnt "$KVER"
+          sudo mkdir -p mnt/etc/modprobe.d mnt/etc/modules-load.d
+          echo 'blacklist rtl8xxxu' | sudo tee mnt/etc/modprobe.d/rtl8192eu.conf > /dev/null
+          echo '8192eu' | sudo tee mnt/etc/modules-load.d/rtl8192eu.conf > /dev/null
+
+      # ============================================================
+      # /etc/fstab (Kupfer-style)
+      # ============================================================
+      - name: Create /etc/fstab
+        run: |
+          sudo tee mnt/etc/fstab > /dev/null << 'FSTAB'
+          # /etc/fstab — Kupfer Linux on begonia
+          LABEL=kupfer_root  /  ext4  rw,noatime,nodiratime,data=ordered  0 1
+          tmpfs  /tmp  tmpfs  rw,nosuid,nodev,noexec,mode=1777  0 0
+          FSTAB
+          echo "✓ /etc/fstab:"
+          cat mnt/etc/fstab
+
+      # ============================================================
+      # Generate Kupfer initramfs via mkinitcpio
+      # ============================================================
+      - name: Generate initramfs
+        run: |
+          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          echo "Generating initramfs for kernel $KVER..."
+
+          sudo chroot mnt /bin/bash -c '
+            KVER=$(ls /usr/lib/modules/ | head -1)
+            echo "Kernel in chroot: $KVER"
+            # Generate preset
+            mkdir -p /etc/mkinitcpio.d
+            cat > /etc/mkinitcpio.d/linux-kupfer.preset << PRESET
+            ALL_config="/etc/mkinitcpio.conf"
+            PRESET_kver="${KVER}"
+            PRESET_kver="${KVER}"
+            ALL_kver="${KVER}"
+            default_image="/boot/initramfs-kupfer.img"
+            default_options=""
+            fallback_image="/boot/initramfs-kupfer-fallback.img"
+            fallback_options="-S autodetect"
+            PRESET
+
+            # Generate the initramfs
+            mkinitcpio -p linux-kupfer 2>&1 || {
+              echo "Preset failed, trying direct..."
+              mkinitcpio -k "$KVER" -g /boot/initramfs-kupfer.img \
+                -H base udev autodetect modconf block rootfsdetect filesystems keyboard fsck 2>&1
+            }
+          '
+
+          echo "Initramfs generated:"
+          ls -lh mnt/boot/initramfs-kupfer.img 2>/dev/null || ls -lh mnt/boot/initramfs-*.img
+
+      # ============================================================
+      # Build Kupfer boot.img
+      # Using pmOS kernel (Image.gz) + DTB + Kupfer initramfs
+      # ============================================================
+      - name: Build boot.img (from pmOS kernel + DTB + Kupfer initramfs)
+        run: |
+          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          CMDLINE=$(cat boot-build/cmdline.txt)
+          echo "Cmdline: $CMDLINE"
+
+          PMOS_BOOT="pmos-base/boot.img"
+
+          if [ ! -f "$PMOS_BOOT" ]; then
+            echo "❌ No pmOS boot.img found"
+            exit 1
+          fi
+
+          # Find initramfs we built
+          INITRAMFS=$(find mnt/boot -name "initramfs-kupfer.img" | head -1)
+          [ -z "$INITRAMFS" ] && INITRAMFS=$(find mnt/boot -name "initramfs-*.img" | head -1)
+          echo "Initramfs: $INITRAMFS ($(ls -lh $INITRAMFS | awk '{print $5}'))"
+
+          if [ ! -f "$INITRAMFS" ]; then
+            echo "❌ No initramfs found"
+            exit 1
+          fi
+
+          # Use Python repacker: replace pmOS initramfs with Kupfer mkinitcpio initramfs
+          python3 scripts/repack-bootimg.py \
+            "$PMOS_BOOT" \
+            "$INITRAMFS" \
+            "$CMDLINE" \
+            boot-kupfer-begonia.img
+
+          echo "=== boot.img ==="
+          ls -lh boot-kupfer-begonia.img
+
+          # Verify
+          python3 -c "
+          with open('boot-kupfer-begonia.img', 'rb') as f:
+              data = f.read(576)
+          c = data[64:576].rstrip(b'\x00').decode('ascii', 'replace')
+          print(f'Cmdline: {c}')
+          print(f'root= present: {\"root=\" in c} ✅')
+          print(f'kupfer label: {\"kupfer\" in c} ✅')
+          r_size = struct.unpack('<I', data[16:20])[0]
+          print(f'Ramdisk: {r_size:,} B')
+          ''
+          " 2>/dev/null || python3 -c "
+          import struct
+          with open('boot-kupfer-begonia.img', 'rb') as f:
+              data = f.read(576)
+          c = data[64:576].rstrip(b'\x00').decode('ascii', 'replace')
+          print(f'Cmdline: {c}')
+          print(f'root= present: {\"root=\" in c} ✅')
+          r_size = struct.unpack('<I', data[16:20])[0]
+          print(f'Ramdisk: {r_size:,} B')
+          "
+
+      # ============================================================
+      # Enable services & user
+      # ============================================================
+      - name: Configure system
+        run: |
+          sudo chroot mnt /bin/bash -c '
+            systemctl set-default multi-user.target
+            systemctl enable sshd
+            systemctl enable NetworkManager
+            systemctl enable systemd-timesyncd
+            useradd -m -s /bin/bash alarm 2>/dev/null || true
+            echo "alarm:alarm" | chpasswd
+            usermod -aG wheel alarm 2>/dev/null || true
+            sed -i "s/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/" /etc/sudoers
+            echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+          '
+
+      # ============================================================
+      # Release
+      # ============================================================
+      - name: Cleanup and compress
+        run: |
+          sudo umount mnt/dev/pts 2>/dev/null || true
+          sudo umount mnt/dev 2>/dev/null || true
+          sudo umount mnt/sys 2>/dev/null || true
+          sudo umount mnt/proc 2>/dev/null || true
+          sudo umount mnt 2>/dev/null || true
+
+          mkdir -p release
+          mv boot-kupfer-begonia.img release/
+          xz -9 -T 0 -f rootfs.img
+          mv rootfs.img.xz release/rootfs-kupfer-begonia-console.img.xz
+          cd release && sha256sum * > SHA256SUMS.txt && ls -lh && cd ..
+
+      - name: Create/Update Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: kupfer-nightly
+          name: "Kupfer Linux for begonia (nightly)"
+          body: |
+            ## Kupfer Linux for Xiaomi Redmi Note 8 Pro (begonia)
+
+            **Arch Linux ARM + Kupfer initramfs + pmOS kernel**
+
+            ### Flujo de boot
+            ```
+            Bootloader → kernel pmOS 6.16.4 (mt6785 mainline)
+            → mkinitcpio initramfs (Kupfer hooks)
+            → busca kupfer_root por label
+            → switch_root → systemd de Arch Linux ARM 🚀
+            ```
+
+            ### Install
+            ```
+            xz -d rootfs-kupfer-begonia-console.img.xz
+            fastboot format:ext4 userdata
+            fastboot flash boot boot-kupfer-begonia.img
+            fastboot flash userdata rootfs-kupfer-begonia-console.img
+            fastboot reboot
+            ```
+
+            **Login:** `alarm` / `alarm`
+            **WiFi:** TP-Link WN821N (RTL8192EU) incluido
+          prerelease: true
+          makeLatest: true
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: release/*
