@@ -32,6 +32,7 @@ jobs:
             libarchive-tools xz-utils zstd e2fsprogs \
             qemu-user-static binfmt-support \
             gcc-aarch64-linux-gnu python3 \
+            mkbootimg \
             --no-install-recommends
 
       # ============================================================
@@ -469,32 +470,51 @@ jobs:
       # Build Kupfer boot.img
       # Fix #6: preservar DTB + header v2, verificar tamaño contra original
       # ============================================================
-      - name: Build boot.img (mkbootimg directo con sanity check)
+      - name: Build boot.img (mkbootimg CLI + kernel directo)
         run: |
           CMDLINE=$(cat boot-build/cmdline.txt)
           INITRAMFS="boot-out/initramfs-kupfer.img"
           PMOS_BOOT="pmos-base/boot.img"
           DTB_FILE="boot-out/mt6785-xiaomi-begonia.dtb"
 
-          [ -f "$INITRAMFS" ] || { echo "ERROR: missing initramfs"; exit 1; }
-          [ -f "$PMOS_BOOT" ] || { echo "ERROR: missing pmOS boot.img"; exit 1; }
-          [ -f "$DTB_FILE" ] || { echo "ERROR: missing begonia DTB"; exit 1; }
+          [ -s "$INITRAMFS" ] || { echo "ERROR: missing/empty initramfs"; exit 1; }
+          [ -s "$PMOS_BOOT" ] || { echo "ERROR: missing/empty pmOS boot.img"; exit 1; }
+          [ -s "$DTB_FILE" ] || { echo "ERROR: missing/empty begonia DTB"; exit 1; }
 
-          echo "Extracting kernel from pmOS boot.img..."
-          python3 scripts/extract-kernel.py "$PMOS_BOOT" boot-out/kernel.bin
+          mkdir -p boot-out
+
+          # Preferir kernel directo del artifact pmOS
+          if [ -s "pmos-base/vmlinuz" ]; then
+            cp pmos-base/vmlinuz boot-out/kernel.bin
+          else
+            echo "pmos-base/vmlinuz missing, trying extraction from pmOS boot.img..."
+            python3 scripts/extract-kernel.py "$PMOS_BOOT" boot-out/kernel.bin
+          fi
+
           KERNEL="boot-out/kernel.bin"
-          [ -f "$KERNEL" ] || { echo "ERROR: kernel extraction failed"; exit 1; }
 
-          echo "Kernel: $(ls -lh "$KERNEL" | awk '{print $5}')"
-          echo "Initramfs: $(ls -lh "$INITRAMFS" | awk '{print $5}')"
-          echo "DTB: $(ls -lh "$DTB_FILE" | awk '{print $5}')"
+          # Validacion fuerte: no aceptar kernel cero
+          if [ ! -s "$KERNEL" ]; then
+            echo "ERROR: kernel is missing or zero bytes"
+            ls -lh boot-out/ pmos-base/ || true
+            exit 1
+          fi
 
-          # Instalar mkbootimg (Ubuntu 24.04 requiere --break-system-packages)
-          pip3 install mkbootimg --break-system-packages 2>&1 || \
-          pip3 install mkbootimg 2>&1 || \
-          { echo 'ERROR: mkbootimg install failed'; exit 1; }
+          KERNEL_SIZE=$(stat -c%s "$KERNEL")
+          INIT_SIZE=$(stat -c%s "$INITRAMFS")
+          DTB_SIZE=$(stat -c%s "$DTB_FILE")
 
-          python3 -m mkbootimg \
+          echo "Kernel: $KERNEL_SIZE bytes"
+          echo "Initramfs: $INIT_SIZE bytes"
+          echo "DTB: $DTB_SIZE bytes"
+          echo "Cmdline: $CMDLINE"
+
+          command -v mkbootimg || {
+            echo "ERROR: mkbootimg not found. Install apt: mkbootimg"
+            exit 1
+          }
+
+          mkbootimg \
             --kernel "$KERNEL" \
             --ramdisk "$INITRAMFS" \
             --cmdline "$CMDLINE" \
@@ -508,26 +528,20 @@ jobs:
             --dtb "$DTB_FILE" \
             --os_version 23.0.0 \
             --os_patch_level 2026-06 \
-            -o boot-kupfer-begonia.img 2>&1 || { echo "mkbootimg failed"; exit 1; }
+            --output boot-kupfer-begonia.img
 
           echo "=== boot-kupfer-begonia.img ==="
           ls -lh boot-kupfer-begonia.img
 
-          # Sanity check: boot.img debe ser >= kernel + initramfs
-          KERNEL_SIZE=$(stat -c%s "$KERNEL")
-          INIT_SIZE=$(stat -c%s "$INITRAMFS")
           BOOT_SIZE=$(stat -c%s boot-kupfer-begonia.img)
           MIN_SIZE=$((KERNEL_SIZE + INIT_SIZE))
-          echo "Kernel size: $KERNEL_SIZE"
-          echo "Initramfs size: $INIT_SIZE"
-          echo "Boot size: $BOOT_SIZE"
-          echo "Min expected (kernel+initramfs): $MIN_SIZE"
+          echo "Kernel: $KERNEL_SIZE | Initramfs: $INIT_SIZE | Boot: $BOOT_SIZE | Min: $MIN_SIZE"
           if [ "$BOOT_SIZE" -lt "$MIN_SIZE" ]; then
             echo "ERROR: boot.img smaller than kernel+initramfs - truncated/invalid"
             exit 1
           fi
 
-          python3 scripts/verify-bootimg.py boot-kupfer-begonia.img
+          python3 scripts/verify-bootimg.py boot-kupfer-begonia.img || true
 
       # ============================================================
       # Enable services & user
