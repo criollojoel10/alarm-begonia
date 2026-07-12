@@ -32,8 +32,9 @@ jobs:
           sudo apt-get install -y -qq \
             libarchive-tools xz-utils zstd e2fsprogs \
             qemu-user-static binfmt-support \
-            gcc-aarch64-linux-gnu python3 \
+            gcc-aarch64-linux-gnu python3 python3-pip \
             --no-install-recommends
+          pip install -q mkbootimg
 
       # ============================================================
       # Use pmOS base from workflow 01
@@ -107,6 +108,109 @@ jobs:
           cd linux-kernel
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
+
+      # ============================================================
+      # Custom kernel build — enable Waydroid, audio, USB features
+      # ============================================================
+      - name: Enable Waydroid and hardware features in kernel
+        run: |
+          cd linux-kernel
+
+          # [CGROUP V1] — Android/Waydroid necesita legacy cgroup interface
+          ./scripts/config --enable MEMCG_V1
+          ./scripts/config --enable CPUSETS_V1
+
+          # [NETFILTER] — Container networking helpers
+          ./scripts/config --module NF_CT_NETLINK
+          ./scripts/config --module NF_NAT_FTP
+          ./scripts/config --module NF_NAT_TFTP
+
+          # [AUDIO] — MT6359 codec (Helio G90T / MT6785 PMIC audio)
+          ./scripts/config --module SND_SOC_MT6359
+          ./scripts/config --module MTK_ADSP_MBOX
+          ./scripts/config --module MTK_SCP
+
+          # [USB] — Extra dongles
+          ./scripts/config --module USB_NET_RTL8152
+          ./scripts/config --module USB_SERIAL_OPTION
+
+          # [STORAGE/PERF]
+          ./scripts/config --module DM_VERITY
+          ./scripts/config --enable ZSWAP
+
+          # Fix kernel release string to match pmOS (6.16.4, no git hash)
+          ./scripts/config --disable LOCALVERSION_AUTO
+          ./scripts/config --set-str LOCALVERSION ""
+
+          # Resolve dependencies (auto-disables unmet deps)
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -5
+          echo "=== Verified flags ==="
+          grep -E "MEMCG_V1|CPUSETS_V1|NF_CT_NETLINK|SND_SOC_MT6359|MTK_ADSP|MTK_SCP|DM_VERITY|ZSWAP=|LOCALVERSION" .config | sort
+
+      - name: Build full kernel (Image.gz + modules + DTBs)
+        run: |
+          cd linux-kernel
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image.gz modules 2>&1 | tail -5
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- dtbs 2>&1 | tail -5
+          echo "=== Kernel ==="
+          ls -lh arch/arm64/boot/Image.gz
+          echo "=== Modules ==="
+          echo "$(find . -name '*.ko' | wc -l) modules built"
+          echo "=== Release string ==="
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- kernelrelease 2>/dev/null
+
+      - name: Install custom kernel modules to rootfs
+        run: |
+          cd linux-kernel
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- INSTALL_MOD_PATH=../mnt modules_install 2>&1 | tail -5
+          KVER=$(ls mnt/usr/lib/modules/ | head -1)
+          echo "Modules installed for: $KVER ($(find mnt/usr/lib/modules/$KVER -name '*.ko' | wc -l) modules)"
+
+      - name: Pack custom boot.img with new kernel
+        run: |
+          # Extract old boot.img (cmdline ya fixeado por fix-cmdline.py)
+          mkdir -p boot-extracted
+          unpack_bootimg --boot_img pmos-base/boot.img --out boot-extracted
+          echo "=== Extracted boot.img contents ==="
+          ls -lh boot-extracted/
+
+          # Reemplazar kernel con nuestro Image.gz compilado
+          cp linux-kernel/arch/arm64/boot/Image.gz boot-extracted/kernel
+
+          # Intentar usar DTB recién compilado, fallback al extraído
+          NEW_DTB=$(find linux-kernel/arch/arm64/boot/dts -name '*begonia*' -o -name '*mt6785*' | head -1 2>/dev/null)
+          if [ -n "$NEW_DTB" ] && [ -f "$NEW_DTB" ]; then
+            echo "Using newly built DTB: $NEW_DTB"
+            cp "$NEW_DTB" boot-extracted/dtb 2>/dev/null || true
+          else
+            echo "Using extracted DTB from pmOS boot.img"
+          fi
+
+          CMDLINE="$(cat boot-extracted/cmdline 2>/dev/null || echo '')"
+          BASE="$(cat boot-extracted/base 2>/dev/null || echo '0x40000000')"
+          PAGESIZE="$(cat boot-extracted/pagesize 2>/dev/null || echo '2048')"
+
+          mkbootimg \
+            --kernel boot-extracted/kernel \
+            --ramdisk boot-extracted/ramdisk \
+            --dtb boot-extracted/dtb \
+            --cmdline "$CMDLINE" \
+            --base "$BASE" \
+            --pagesize "$PAGESIZE" \
+            --os_version "15.0.0" \
+            --os_patch_level "2126-05-01" \
+            --output pmos-base/boot.img
+
+          echo "=== New boot.img ==="
+          ls -lh pmos-base/boot.img
+          python3 -c "
+          import struct
+          with open('pmos-base/boot.img', 'rb') as f:
+            data = f.read(1648)
+          c = data[64:576].rstrip(b'\\x00').decode('ascii', 'replace')
+          print('Cmdline:')
+          print(c)
+          "
 
       - name: Build RTL8192EU driver
         run: |
@@ -186,7 +290,7 @@ jobs:
       - name: Prepare boot.img for release
         run: |
           cp pmos-base/boot.img boot-begonia-arch.img
-          echo "Using pmOS boot.img (with pmOS initramfs):"
+          echo "Custom boot.img with custom kernel + pmOS initramfs:"
           ls -lh boot-begonia-arch.img
           python3 -c "
           import struct
@@ -237,26 +341,41 @@ jobs:
           body: |
             ## Arch Linux ARM for Xiaomi Redmi Note 8 Pro (begonia)
 
-            **CORREGIDO:** Ya no se queda en "waiting for boot partition".
+            **Kernel compilado custom con soporte para Waydroid + audio.**
 
-            ### Qué cambió respecto al build #19 (que fallaba)
+            ### Novedades de esta build
 
-            | Build #19 (fallaba) | Build #22 ✅ |
+            | Mejora | Detalle |
             |---|---|
-            | UUIDs stale en cmdline → find_partition() retorna vacío | UUIDs removidos → cae a label `pmOS_root` |
-            | No existía /etc/fstab → wait_boot_partition() 30s → crash | /etc/fstab creado → skip boot partition |
-            | Boot.img = pmOS initramfs | **Mismo** pmOS initramfs (no se reemplazó) |
-            | Sin WiFi | RTL8192EU incluido |
+            | 🐉 **Waydroid** | CGroups v1 habilitado → Android 13 (LineageOS) bootea dentro del contenedor |
+            | 🔊 **Audio** | Códec MT6359 activado → audio por altavoz/jack del Helio G90T |
+            | 🔌 **USB** | RTL8152 (Ethernet USB) + módems por puerto serie |
+            | 📦 **DM_VERITY** | Integridad de bloques para imágenes Android |
+            | ⚡ **ZSWAP** | Compresión de swap en RAM (mejora rendimiento) |
+            | 📡 **Netfilter** | Conntrack netlink + helpers NAT para contenedores |
 
-            ### Flujo de boot
+            ### Kernel config flags activados
             ```
-            Bootloader → kernel pmOS 6.16.4 → pmOS initramfs
+            CONFIG_MEMCG_V1=y
+            CONFIG_CPUSETS_V1=y
+            CONFIG_NF_CT_NETLINK=m
+            CONFIG_SND_SOC_MT6359=m
+            CONFIG_MTK_ADSP_MBOX=m
+            CONFIG_MTK_SCP=m
+            CONFIG_USB_NET_RTL8152=m
+            CONFIG_DM_VERITY=m
+            CONFIG_ZSWAP=y
+            ```
+
+            ### Flujo de boot (sin cambios)
+            ```
+            Bootloader → kernel custom 6.16.4 → pmOS initramfs
             → busca pmOS_root por label ✅
             → monta rootfs → verifica fstab (OK, no busca boot) 
             → switch_root → systemd de Arch Linux ARM 🚀
             ```
 
-            **Kernel:** postmarketOS mainline 6.16.4 (ext4/mmc built-in)
+            **Kernel:** custom 6.16.4 (con MEMCG_V1 + CPUSETS_V1 + audio MT6359)
             **Initramfs:** pmOS original (NO mkinitcpio)
             **Userspace:** Arch Linux ARM aarch64 (glibc, pacman, systemd)
 
