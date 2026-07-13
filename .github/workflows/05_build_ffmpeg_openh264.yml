@@ -72,8 +72,11 @@ jobs:
         run: |
           cd /tmp/ffmpeg-src
 
-          export PKG_CONFIG_PATH=/tmp/oh264/lib/pkgconfig
+          # pkg-config is unreliable across steps, use --pkg-config=true
+          # and pass flags directly; verify libs are there
+          ls -la /tmp/oh264/lib/libopenh264.so* /tmp/oh264/lib/pkgconfig/openh264.pc
           ./configure \
+            --pkg-config=true \
             --cross-prefix=aarch64-linux-gnu- \
             --arch=aarch64 --target-os=linux \
             --enable-cross-compile \
