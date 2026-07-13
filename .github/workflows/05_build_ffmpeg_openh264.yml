@@ -34,28 +34,33 @@ jobs:
           make OS=linux ARCH=arm64 CC=aarch64-linux-gnu-gcc \
             AR=aarch64-linux-gnu-ar CXX=aarch64-linux-gnu-g++ \
             CCAS=aarch64-linux-gnu-gcc -j$(nproc) 2>&1 | tail -10
-          mkdir -p /tmp/oh264/{lib,include}
+          mkdir -p /tmp/oh264/{lib,include/wels}
           # Manual install (no install target bug)
           cp libopenh264.so* /tmp/oh264/lib/
-          # Headers estan en codec/api/wels/, no en api/
-          cp codec/api/wels/*.h /tmp/oh264/include/
+          # Headers: ffmpeg busca #include <wels/codec_api.h>
+          cp codec/api/wels/*.h /tmp/oh264/include/wels/
           echo "=== openh264 for aarch64 ==="
           aarch64-linux-gnu-readelf -h /tmp/oh264/lib/libopenh264.so 2>/dev/null | grep -E "Class|Machine"
           ls -lh /tmp/oh264/lib/
           # Crear .pc file para que ffmpeg configure lo encuentre
           mkdir -p /tmp/oh264/lib/pkgconfig
           cat > /tmp/oh264/lib/pkgconfig/openh264.pc << 'PCEOF'
-          prefix=/tmp/oh264
-          exec_prefix=${prefix}
-          libdir=${exec_prefix}/lib
-          includedir=${prefix}/include
-          
-          Name: openh264
-          Description: Cisco OpenH264
-          Version: 2.6.0
-          Libs: -L${libdir} -lopenh264
-          Cflags: -I${includedir}
-          PCEOF
+prefix=/tmp/oh264
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: openh264
+Description: Cisco OpenH264
+Version: 2.6.0
+Libs: -L${libdir} -lopenh264
+Cflags: -I${includedir}
+PCEOF
+          # Verify pkg-config can find it
+          echo "=== Verify pkg-config ==="
+          PKG_CONFIG_PATH=/tmp/oh264/lib/pkgconfig pkg-config --cflags --libs openh264
+          PKG_CONFIG_PATH=/tmp/oh264/lib/pkgconfig pkg-config --modversion openh264
+          echo "=== openh264 ready ==="
+          ls -lh /tmp/oh264/include/wels/
 
       - name: Download ffmpeg source
         run: |
