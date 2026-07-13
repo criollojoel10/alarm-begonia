@@ -34,7 +34,7 @@ jobs:
             qemu-user-static binfmt-support \
             gcc-aarch64-linux-gnu python3 python3-pip \
             --no-install-recommends
-          pip install -q mkbootimg
+          sudo apt-get install -y -qq mkbootimg
 
       # ============================================================
       # Use pmOS base from workflow 01
