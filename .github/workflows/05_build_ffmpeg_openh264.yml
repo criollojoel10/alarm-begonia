@@ -82,14 +82,14 @@ jobs:
             --disable-decoders --disable-muxers --disable-demuxers \
             --disable-parsers --disable-protocols --disable-filters \
             --disable-bsfs --disable-indevs --disable-outdevs \
-            --disable-postproc --disable-avdevice --disable-avformat \
+            --disable-avdevice --disable-avformat \
             --disable-swresample --disable-swscale --disable-network \
             --disable-hwaccels --disable-vulkan --disable-vaapi \
             --disable-vdpau --disable-cuda \
-            2>&1 | tail -20
+            2>&1
 
           echo "=== Building ==="
-          make -j$(nproc) 2>&1 | tail -5
+          make -j$(nproc) 2>&1
           echo "=== Resulting libraries ==="
           find . -name '*.so' -type f 2>/dev/null | sort | while read f; do
             sz=$(ls -lh "$f" | awk '{print $5}')
