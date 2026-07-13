@@ -30,8 +30,10 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/cisco/openh264.git /tmp/openh264-src
           cd /tmp/openh264-src
-          make OS=linux CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar \
-            CXX=aarch64-linux-gnu-g++ -j$(nproc) 2>&1 | tail -5
+          # ARCH=arm64 fuerza ASM_ARCH=arm64 en arch.mk (evita -m64 de x86)
+          make OS=linux ARCH=arm64 CC=aarch64-linux-gnu-gcc \
+            AR=aarch64-linux-gnu-ar CXX=aarch64-linux-gnu-g++ \
+            CCAS=aarch64-linux-gnu-gcc -j$(nproc) 2>&1 | tail -10
           mkdir -p /tmp/oh264/{lib,include}
           # Manual install (no install target bug)
           cp libopenh264.so* /tmp/oh264/lib/
@@ -39,6 +41,20 @@ jobs:
           echo "=== openh264 for aarch64 ==="
           aarch64-linux-gnu-readelf -h /tmp/oh264/lib/libopenh264.so 2>/dev/null | grep -E "Class|Machine"
           ls -lh /tmp/oh264/lib/
+          # Crear .pc file para que ffmpeg configure lo encuentre
+          mkdir -p /tmp/oh264/lib/pkgconfig
+          cat > /tmp/oh264/lib/pkgconfig/openh264.pc << 'PCEOF'
+          prefix=/tmp/oh264
+          exec_prefix=${prefix}
+          libdir=${exec_prefix}/lib
+          includedir=${prefix}/include
+          
+          Name: openh264
+          Description: Cisco OpenH264
+          Version: 2.6.0
+          Libs: -L${libdir} -lopenh264
+          Cflags: -I${includedir}
+          PCEOF
 
       - name: Download ffmpeg source
         run: |
@@ -50,6 +66,7 @@ jobs:
         run: |
           cd /tmp/ffmpeg-src
 
+          export PKG_CONFIG_PATH=/tmp/oh264/lib/pkgconfig
           ./configure \
             --cross-prefix=aarch64-linux-gnu- \
             --arch=aarch64 --target-os=linux \
