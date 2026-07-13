@@ -68,12 +68,10 @@ jobs:
             https://git.ffmpeg.org/ffmpeg.git /tmp/ffmpeg-src 2>&1 | tail -3
           echo "Version: $(cd /tmp/ffmpeg-src && git describe --tags 2>/dev/null || echo $FFMPEG_TAG)"
 
-      - name: Cross-compile ffmpeg (aarch64, only libavcodec + libavutil)
+      - name: Cross-compile ffmpeg (aarch64, all libs neatvnc needs)
         run: |
           cd /tmp/ffmpeg-src
 
-          # pkg-config is unreliable across steps, use --pkg-config=true
-          # and pass flags directly; verify libs are there
           ls -la /tmp/oh264/lib/libopenh264.so* /tmp/oh264/lib/pkgconfig/openh264.pc
           ./configure \
             --pkg-config=true \
@@ -87,13 +85,10 @@ jobs:
             --extra-cflags="-I/tmp/oh264/include" \
             --extra-ldflags="-L/tmp/oh264/lib" \
             --extra-libs="-lopenh264" \
-            --disable-decoders --disable-muxers --disable-demuxers \
-            --disable-parsers --disable-protocols --disable-filters \
-            --disable-bsfs --disable-indevs --disable-outdevs \
-            --disable-avdevice --disable-avformat \
-            --disable-swresample --disable-swscale --disable-network \
-            --disable-hwaccels --disable-vulkan --disable-vaapi \
-            --disable-vdpau --disable-cuda \
+            --disable-indevs --disable-outdevs \
+            --disable-avdevice \
+            --disable-network --disable-hwaccels \
+            --disable-vulkan --disable-vaapi --disable-vdpau --disable-cuda \
             2>&1
 
           echo "=== Building ==="
@@ -110,10 +105,10 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/release/lib
           cd /tmp/ffmpeg-src
 
-          # Copy libavcodec + libavutil (wayvnc/neatvnc only need these)
-          # ffmpeg build puts them in subdirectories: libavcodec/libavcodec.so*
-          cp -L libavcodec/libavcodec.so* $GITHUB_WORKSPACE/release/lib/ 2>/dev/null || true
-          cp -L libavutil/libavutil.so* $GITHUB_WORKSPACE/release/lib/ 2>/dev/null || true
+          # Copy all ffmpeg libs neatvnc needs (must be ABI-consistent)
+          for dir in libavcodec libavutil libavformat libswscale libswresample libavfilter; do
+            cp -L $dir/$dir.so* $GITHUB_WORKSPACE/release/lib/ 2>/dev/null || true
+          done
 
           # Copy openh264 as runtime dep
           cp /tmp/oh264/lib/libopenh264.so* $GITHUB_WORKSPACE/release/lib/ 2>/dev/null || true
