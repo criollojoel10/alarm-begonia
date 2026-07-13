@@ -23,7 +23,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             build-essential nasm yasm \
-            gcc-aarch64-linux-gnu pkg-config \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config \
             --no-install-recommends
 
       - name: Build openh264 (aarch64)
