@@ -108,10 +108,12 @@ jobs:
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch ${{ env.KERNEL_TAG }} \
-            ${{ env.KERNEL_REPO }} linux-kernel 2>&1 | tail -3
+            ${{ env.KERNEL_REPO }} linux-kernel 2>&1 | tail -5
+          test -d linux-kernel/.git || { echo 'ERROR: kernel clone failed'; exit 1; }
 
       - name: Prepare kernel build tree
         run: |
+          test -d linux-kernel || { echo 'ERROR: linux-kernel/ not found'; exit 1; }
           wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
           cd linux-kernel
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
