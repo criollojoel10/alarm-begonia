@@ -1,0 +1,193 @@
+name: "04 — Build kernel-only (boot.img) para begonia"
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_tag:
+        description: "Kernel tag (rama pmOS mainline)"
+        default: "6.16.4-r0"
+      custom_cmdline:
+        description: "Extra cmdline flags"
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  KERNEL_REPO: "https://gitlab.postmarketos.org/mt6785-mainline/linux.git"
+  KERNEL_TAG: ${{ github.event.inputs.kernel_tag || '6.16.4-r0' }}
+  KERNEL_CONFIG_URL: "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/linux-postmarketos-mediatek-mt6785/config-postmarketos-mediatek-mt6785.aarch64"
+  CACHE_KEY_KERNEL: "v1-kernel-${{ github.event.inputs.kernel_tag || '6.16.4-r0' }}"
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libarchive-tools xz-utils zstd e2fsprogs \
+            qemu-user-static binfmt-support build-essential \
+            gcc-aarch64-linux-gnu python3 python3-pip \
+            --no-install-recommends
+          # osm0sis/mkbootimg: C binary, sin bug de gki module de Google
+          git clone --depth=1 https://github.com/osm0sis/mkbootimg.git /tmp/mkbootimg-repo
+          sed -i 's/-Werror//' /tmp/mkbootimg-repo/Makefile /tmp/mkbootimg-repo/libmincrypt/Makefile
+          make -C /tmp/mkbootimg-repo
+          sudo cp /tmp/mkbootimg-repo/mkbootimg /usr/local/bin/
+          sudo cp /tmp/mkbootimg-repo/unpackbootimg /usr/local/bin/unpack_bootimg
+          which mkbootimg unpack_bootimg || exit 1
+
+      # ============================================================
+      # pmOS base (necesitamos boot.img para extraer ramdisk + repack)
+      # ============================================================
+      - name: Download pmOS base
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          name: pmos-base-begonia
+          path: pmos-base
+          workflow: 01_build_pmos_base.yml
+          workflow_conclusion: success
+          workflow_search: true
+          check_artifacts: true
+          repo: criollojoel10/alarm-begonia
+
+      # ============================================================
+      # Kernel source (cacheable)
+      # ============================================================
+      - name: Restore kernel source cache
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: linux-kernel
+          key: ${{ env.CACHE_KEY_KERNEL }}
+          restore-keys: |
+            v1-kernel-
+
+      - name: Clone kernel source (shallow, tag ${{ env.KERNEL_TAG }})
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.KERNEL_TAG }} \
+            ${{ env.KERNEL_REPO }} linux-kernel 2>&1 | tail -3
+
+      - name: Prepare kernel build tree
+        run: |
+          wget -q "${{ env.KERNEL_CONFIG_URL }}" -O linux-kernel/.config
+          cd linux-kernel
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -5
+
+      # ============================================================
+      # Enable Waydroid + hardware features
+      # ============================================================
+      - name: Enable Waydroid and hardware features in kernel
+        run: |
+          cd linux-kernel
+
+          # CGroups v1 — Android/Waydroid
+          ./scripts/config --enable MEMCG_V1
+          ./scripts/config --enable CPUSETS_V1
+
+          # Netfilter — container networking
+          ./scripts/config --module NF_CT_NETLINK
+          ./scripts/config --module NF_NAT_FTP
+          ./scripts/config --module NF_NAT_TFTP
+
+          # Audio — MT6359 codec (Helio G90T)
+          ./scripts/config --module SND_SOC_MT6359
+          ./scripts/config --module MTK_ADSP_MBOX
+          ./scripts/config --module MTK_SCP
+
+          # USB dongles
+          ./scripts/config --module USB_NET_RTL8152
+          ./scripts/config --module USB_SERIAL_OPTION
+
+          # Storage/performance
+          ./scripts/config --module DM_VERITY
+          ./scripts/config --enable ZSWAP
+
+          # Clean kernel release string
+          ./scripts/config --disable LOCALVERSION_AUTO
+          ./scripts/config --set-str LOCALVERSION ""
+
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -5
+          echo "=== Verified flags ==="
+          grep -E "MEMCG_V1|CPUSETS_V1|NF_CT_NETLINK|SND_SOC_MT6359|MTK_ADSP|MTK_SCP|DM_VERITY|ZSWAP=|LOCALVERSION" .config | sort
+
+      - name: Build kernel (Image.gz + modules + DTBs)
+        run: |
+          cd linux-kernel
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image.gz modules 2>&1 | tail -5
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- dtbs 2>&1 | tail -5
+          echo "=== Kernel built ==="
+          ls -lh arch/arm64/boot/Image.gz
+          echo "Modules: $(find . -name '*.ko' | wc -l)"
+          echo "Release: $(make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- kernelrelease 2>/dev/null)"
+
+      # ============================================================
+      # Pack boot.img (reemplazar kernel + DTB, conservar ramdisk)
+      # ============================================================
+      - name: Pack custom boot.img with new kernel
+        run: |
+          # Extraer boot.img original de pmOS
+          mkdir -p boot-extracted
+          unpack_bootimg --input pmos-base/boot.img --output boot-extracted
+          echo "=== Extracted ==="
+          ls -lh boot-extracted/
+
+          # Reemplazar kernel
+          cp linux-kernel/arch/arm64/boot/Image.gz boot-extracted/kernel
+
+          # Reemplazar DTB si compilamos uno nuevo
+          NEW_DTB=$(find linux-kernel/arch/arm64/boot/dts -name '*begonia*' -o -name '*mt6785*' 2>/dev/null | head -1)
+          if [ -n "$NEW_DTB" ] && [ -f "$NEW_DTB" ]; then
+            echo "Using new DTB: $NEW_DTB"
+            cp "$NEW_DTB" boot-extracted/dtb
+          else
+            echo "Using extracted DTB from pmOS"
+          fi
+
+          CMDLINE="$(cat boot-extracted/cmdline 2>/dev/null || echo '')"
+          BASE="$(cat boot-extracted/base 2>/dev/null || echo '0x40000000')"
+          PAGESIZE="$(cat boot-extracted/pagesize 2>/dev/null || echo '2048')"
+
+          # Agregar cmdline extra si se especificó
+          EXTRA="${{ github.event.inputs.custom_cmdline || '' }}"
+          if [ -n "$EXTRA" ]; then
+            CMDLINE="$CMDLINE $EXTRA"
+          fi
+
+          mkbootimg \
+            --kernel boot-extracted/kernel \
+            --ramdisk boot-extracted/ramdisk \
+            --dtb boot-extracted/dtb \
+            --cmdline "$CMDLINE" \
+            --base "$BASE" \
+            --pagesize "$PAGESIZE" \
+            --os_version "15.0.0" \
+            --os_patch_level "2126-05-01" \
+            --output boot-begonia-kernel.img
+
+          echo "=== New boot.img ==="
+          ls -lh boot-begonia-kernel.img
+          python3 -c "
+          import struct
+          with open('boot-begonia-kernel.img', 'rb') as f:
+            data = f.read(1648)
+          c = data[64:576].rstrip(b'\\x00').decode('ascii', 'replace')
+          print('Cmdline:')
+          print(c)
+          "
+
+      - name: Upload kernel boot.img artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-begonia-kernel
+          path: boot-begonia-kernel.img
+          compression-level: 0
+          retention-days: 7
