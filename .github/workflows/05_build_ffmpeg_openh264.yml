@@ -1,0 +1,113 @@
+name: "05 — Build ffmpeg+openh264 para begonia (aarch64)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: "FFmpeg tag"
+        default: "n8.1.2"
+
+env:
+  FFMPEG_TAG: ${{ github.event.inputs.ffmpeg_version || 'n8.1.2' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential nasm yasm \
+            gcc-aarch64-linux-gnu pkg-config-aarch64-linux-gnu \
+            --no-install-recommends
+
+      - name: Build openh264 (aarch64)
+        run: |
+          git clone --depth=1 https://github.com/cisco/openh264.git /tmp/openh264-src
+          cd /tmp/openh264-src
+          make OS=linux CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar \
+            CXX=aarch64-linux-gnu-g++ -j$(nproc) 2>&1 | tail -5
+          mkdir -p /tmp/oh264/{lib,include}
+          # Manual install (no install target bug)
+          cp libopenh264.so* /tmp/oh264/lib/
+          cp api/*.h /tmp/oh264/include/
+          echo "=== openh264 for aarch64 ==="
+          aarch64-linux-gnu-readelf -h /tmp/oh264/lib/libopenh264.so 2>/dev/null | grep -E "Class|Machine"
+          ls -lh /tmp/oh264/lib/
+
+      - name: Download ffmpeg source
+        run: |
+          git clone --depth 1 --branch ${{ env.FFMPEG_TAG }} \
+            https://git.ffmpeg.org/ffmpeg.git /tmp/ffmpeg-src 2>&1 | tail -3
+          echo "Version: $(cd /tmp/ffmpeg-src && git describe --tags 2>/dev/null || echo $FFMPEG_TAG)"
+
+      - name: Cross-compile ffmpeg (aarch64, only libavcodec + libavutil)
+        run: |
+          cd /tmp/ffmpeg-src
+
+          ./configure \
+            --cross-prefix=aarch64-linux-gnu- \
+            --arch=aarch64 --target-os=linux \
+            --enable-cross-compile \
+            --enable-shared --disable-static \
+            --disable-doc --disable-programs \
+            --disable-encoders --enable-encoder=libopenh264 \
+            --enable-libopenh264 \
+            --extra-cflags="-I/tmp/oh264/include" \
+            --extra-ldflags="-L/tmp/oh264/lib" \
+            --extra-libs="-lopenh264" \
+            --disable-decoders --disable-muxers --disable-demuxers \
+            --disable-parsers --disable-protocols --disable-filters \
+            --disable-bsfs --disable-indevs --disable-outdevs \
+            --disable-postproc --disable-avdevice --disable-avformat \
+            --disable-swresample --disable-swscale --disable-network \
+            --disable-hwaccels --disable-vulkan --disable-vaapi \
+            --disable-vdpau --disable-cuda \
+            2>&1 | tail -20
+
+          echo "=== Building ==="
+          make -j$(nproc) 2>&1 | tail -5
+          echo "=== Resulting libraries ==="
+          find . -name '*.so' -type f 2>/dev/null | sort | while read f; do
+            sz=$(ls -lh "$f" | awk '{print $5}')
+            arch=$(aarch64-linux-gnu-readelf -h "$f" 2>/dev/null | grep Machine | head -1)
+            echo "$sz  $f  $arch"
+          done
+
+      - name: Package libs as artifact
+        run: |
+          mkdir -p release/lib
+          cd /tmp/ffmpeg-src
+
+          # Copy libavcodec + libavutil (wayvnc/neatvnc only need these)
+          # ffmpeg build puts them in subdirectories: libavcodec/libavcodec.so*
+          cp -L libavcodec/libavcodec.so* ../release/lib/ 2>/dev/null || true
+          cp -L libavutil/libavutil.so* ../release/lib/ 2>/dev/null || true
+
+          # Copy openh264 as runtime dep
+          cp /tmp/oh264/lib/libopenh264.so* ../release/lib/ 2>/dev/null || true
+
+          cd ../release
+          echo "=== Contents ==="
+          ls -lh lib/
+          echo "=== Verify arch ==="
+          for f in lib/*.so*; do
+            echo -n "$f: "
+            aarch64-linux-gnu-readelf -h "$f" 2>/dev/null | grep -E "Class|Machine" | head -1
+          done
+
+          tar -czf ffmpeg-openh264-aarch64.tar.gz lib/
+          echo "=== Archive ==="
+          ls -lh ffmpeg-openh264-aarch64.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-openh264-aarch64
+          path: release/ffmpeg-openh264-aarch64.tar.gz
+          retention-days: 14
