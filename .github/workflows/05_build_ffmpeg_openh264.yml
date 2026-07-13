@@ -45,16 +45,16 @@ jobs:
           # Crear .pc file para que ffmpeg configure lo encuentre
           mkdir -p /tmp/oh264/lib/pkgconfig
           cat > /tmp/oh264/lib/pkgconfig/openh264.pc << 'PCEOF'
-prefix=/tmp/oh264
-libdir=${prefix}/lib
-includedir=${prefix}/include
-
-Name: openh264
-Description: Cisco OpenH264
-Version: 2.6.0
-Libs: -L${libdir} -lopenh264
-Cflags: -I${includedir}
-PCEOF
+          prefix=/tmp/oh264
+          libdir=${prefix}/lib
+          includedir=${prefix}/include
+          
+          Name: openh264
+          Description: Cisco OpenH264
+          Version: 2.6.0
+          Libs: -L${libdir} -lopenh264
+          Cflags: -I${includedir}
+          PCEOF
           # Verify pkg-config can find it
           echo "=== Verify pkg-config ==="
           PKG_CONFIG_PATH=/tmp/oh264/lib/pkgconfig pkg-config --cflags --libs openh264
