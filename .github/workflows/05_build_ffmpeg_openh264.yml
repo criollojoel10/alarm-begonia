@@ -99,18 +99,18 @@ jobs:
 
       - name: Package libs as artifact
         run: |
-          mkdir -p release/lib
+          mkdir -p $GITHUB_WORKSPACE/release/lib
           cd /tmp/ffmpeg-src
 
           # Copy libavcodec + libavutil (wayvnc/neatvnc only need these)
           # ffmpeg build puts them in subdirectories: libavcodec/libavcodec.so*
-          cp -L libavcodec/libavcodec.so* ../release/lib/ 2>/dev/null || true
-          cp -L libavutil/libavutil.so* ../release/lib/ 2>/dev/null || true
+          cp -L libavcodec/libavcodec.so* $GITHUB_WORKSPACE/release/lib/ 2>/dev/null || true
+          cp -L libavutil/libavutil.so* $GITHUB_WORKSPACE/release/lib/ 2>/dev/null || true
 
           # Copy openh264 as runtime dep
-          cp /tmp/oh264/lib/libopenh264.so* ../release/lib/ 2>/dev/null || true
+          cp /tmp/oh264/lib/libopenh264.so* $GITHUB_WORKSPACE/release/lib/ 2>/dev/null || true
 
-          cd ../release
+          cd $GITHUB_WORKSPACE/release
           echo "=== Contents ==="
           ls -lh lib/
           echo "=== Verify arch ==="
