@@ -148,7 +148,7 @@ jobs:
           ./scripts/config --module DM_VERITY
           ./scripts/config --enable ZSWAP
 
-          # Fix kernel release string to match pmOS (6.16.4, no git hash)
+          # Fix kernel release string to match pmOS (6.16.4, no + suffix)
           ./scripts/config --disable LOCALVERSION_AUTO
           ./scripts/config --set-str LOCALVERSION ""
 
@@ -156,6 +156,11 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -5
           echo "=== Verified flags ==="
           grep -E "MEMCG_V1|CPUSETS_V1|NF_CT_NETLINK|SND_SOC_MT6359|MTK_ADSP|MTK_SCP|DM_VERITY|ZSWAP=|LOCALVERSION" .config | sort
+
+          # Force clean version: prevent git dirty detection (script/config modifica .config → tree dirty → + suffix)
+          # Prevent + suffix from git dirty tree
+          # Prevent + suffix from git dirty tree (scripts/config modifica .config)
+          printf "" > .scmversion
 
       - name: Build full kernel (Image.gz + modules + DTBs)
         run: |
@@ -172,33 +177,44 @@ jobs:
       - name: Install custom kernel modules to rootfs
         run: |
           cd linux-kernel
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- INSTALL_MOD_PATH=../mnt modules_install 2>&1 | tail -5
+          # Ignorar error del symlink build → source (no necesario para boot)
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- INSTALL_MOD_PATH=../mnt modules_install 2>&1 | tail -10 || true
           KVER=$(ls mnt/usr/lib/modules/ | head -1)
           echo "Modules installed for: $KVER ($(find mnt/usr/lib/modules/$KVER -name '*.ko' | wc -l) modules)"
 
       - name: Pack custom boot.img with new kernel
         run: |
           # Extract old boot.img (cmdline ya fixeado por fix-cmdline.py)
+          # NOTA: osm0sis unpack_bootimg extrae con prefijo "boot.img-"
           mkdir -p boot-extracted
           unpack_bootimg --input pmos-base/boot.img --output boot-extracted
-          echo "=== Extracted boot.img contents ==="
+          echo "=== Extracted boot.img (osm0sis prefix: boot.img-*) ==="
           ls -lh boot-extracted/
+
+          # Crear symlinks sin prefijo para compatibilidad
+          cd boot-extracted
+          for f in boot.img-*; do
+            name="${f#boot.img-}"
+            ln -sf "$f" "$name" 2>/dev/null || true
+          done
+          cd ..
 
           # Reemplazar kernel con nuestro Image.gz compilado
           cp linux-kernel/arch/arm64/boot/Image.gz boot-extracted/kernel
 
-          # Intentar usar DTB recién compilado, fallback al extraído
-          NEW_DTB=$(find linux-kernel/arch/arm64/boot/dts -name '*begonia*' -o -name '*mt6785*' | head -1 2>/dev/null)
+          # Intentar usar DTB recién compilado (excluir .cmd temp files)
+          NEW_DTB=$(find linux-kernel/arch/arm64/boot/dts -name '*begonia*.dtb' -o -name '*mt6785*.dtb' 2>/dev/null | head -1)
           if [ -n "$NEW_DTB" ] && [ -f "$NEW_DTB" ]; then
             echo "Using newly built DTB: $NEW_DTB"
-            cp "$NEW_DTB" boot-extracted/dtb 2>/dev/null || true
+            cp "$NEW_DTB" boot-extracted/dtb
+            ln -sf dtb boot-extracted/boot.img-dtb 2>/dev/null || true
           else
             echo "Using extracted DTB from pmOS boot.img"
           fi
 
-          CMDLINE="$(cat boot-extracted/cmdline 2>/dev/null || echo '')"
-          BASE="$(cat boot-extracted/base 2>/dev/null || echo '0x40000000')"
-          PAGESIZE="$(cat boot-extracted/pagesize 2>/dev/null || echo '2048')"
+          CMDLINE="$(cat boot-extracted/cmdline 2>/dev/null || cat boot-extracted/boot.img-cmdline 2>/dev/null || echo '')"
+          BASE="$(cat boot-extracted/base 2>/dev/null || cat boot-extracted/boot.img-base 2>/dev/null || echo '0x40000000')"
+          PAGESIZE="$(cat boot-extracted/pagesize 2>/dev/null || cat boot-extracted/boot.img-pagesize 2>/dev/null || echo '2048')"
 
           mkbootimg \
             --kernel boot-extracted/kernel \

@@ -120,6 +120,8 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -5
           echo "=== Verified flags ==="
           grep -E "MEMCG_V1|CPUSETS_V1|NF_CT_NETLINK|SND_SOC_MT6359|MTK_ADSP|MTK_SCP|DM_VERITY|ZSWAP=|LOCALVERSION" .config | sort
+          # Prevent + suffix from git dirty tree (scripts/config modifica .config)
+          printf "" > .scmversion
 
       - name: Build kernel (Image.gz + modules + DTBs)
         run: |
@@ -137,26 +139,36 @@ jobs:
       - name: Pack custom boot.img with new kernel
         run: |
           # Extraer boot.img original de pmOS
+          # NOTA: osm0sis unpack_bootimg extrae con prefijo "boot.img-"
           mkdir -p boot-extracted
           unpack_bootimg --input pmos-base/boot.img --output boot-extracted
-          echo "=== Extracted ==="
+          echo "=== Extracted (osm0sis prefix: boot.img-*) ==="
           ls -lh boot-extracted/
 
-          # Reemplazar kernel
+          # Crear symlinks sin prefijo para compatibilidad
+          cd boot-extracted
+          for f in boot.img-*; do
+            name="${f#boot.img-}"
+            ln -sf "$f" "$name" 2>/dev/null || true
+          done
+          cd ..
+
+          # Reemplazar kernel con Image.gz compilado
           cp linux-kernel/arch/arm64/boot/Image.gz boot-extracted/kernel
 
-          # Reemplazar DTB si compilamos uno nuevo
-          NEW_DTB=$(find linux-kernel/arch/arm64/boot/dts -name '*begonia*' -o -name '*mt6785*' 2>/dev/null | head -1)
+          # Reemplazar DTB si compilamos uno nuevo (excluir .cmd temp files)
+          NEW_DTB=$(find linux-kernel/arch/arm64/boot/dts -name '*begonia*.dtb' -o -name '*mt6785*.dtb' 2>/dev/null | head -1)
           if [ -n "$NEW_DTB" ] && [ -f "$NEW_DTB" ]; then
             echo "Using new DTB: $NEW_DTB"
             cp "$NEW_DTB" boot-extracted/dtb
+            ln -sf "dtb" boot-extracted/boot.img-dtb 2>/dev/null || true
           else
             echo "Using extracted DTB from pmOS"
           fi
 
-          CMDLINE="$(cat boot-extracted/cmdline 2>/dev/null || echo '')"
-          BASE="$(cat boot-extracted/base 2>/dev/null || echo '0x40000000')"
-          PAGESIZE="$(cat boot-extracted/pagesize 2>/dev/null || echo '2048')"
+          CMDLINE="$(cat boot-extracted/cmdline 2>/dev/null || cat boot-extracted/boot.img-cmdline 2>/dev/null || echo '')"
+          BASE="$(cat boot-extracted/base 2>/dev/null || cat boot-extracted/boot.img-base 2>/dev/null || echo '0x40000000')"
+          PAGESIZE="$(cat boot-extracted/pagesize 2>/dev/null || cat boot-extracted/boot.img-pagesize 2>/dev/null || echo '2048')"
 
           # Agregar cmdline extra si se especificó
           EXTRA="${{ github.event.inputs.custom_cmdline || '' }}"
