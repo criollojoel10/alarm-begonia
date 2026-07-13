@@ -31,10 +31,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             libarchive-tools xz-utils zstd e2fsprogs \
-            qemu-user-static binfmt-support \
+            qemu-user-static binfmt-support build-essential \
             gcc-aarch64-linux-gnu python3 python3-pip \
             --no-install-recommends
-          sudo apt-get install -y -qq mkbootimg
+          git clone --depth=1 https://github.com/osm0sis/mkbootimg.git /tmp/mkbootimg-repo && make -C /tmp/mkbootimg-repo CC=gcc && sudo cp /tmp/mkbootimg-repo/mkbootimg /usr/local/bin/ && sudo cp /tmp/mkbootimg-repo/unpackbootimg /usr/local/bin/unpack_bootimg
 
       # ============================================================
       # Use pmOS base from workflow 01
@@ -170,7 +170,7 @@ jobs:
         run: |
           # Extract old boot.img (cmdline ya fixeado por fix-cmdline.py)
           mkdir -p boot-extracted
-          unpack_bootimg --boot_img pmos-base/boot.img --out boot-extracted
+          unpack_bootimg --input pmos-base/boot.img --output boot-extracted
           echo "=== Extracted boot.img contents ==="
           ls -lh boot-extracted/
 
