@@ -37,7 +37,8 @@ jobs:
           mkdir -p /tmp/oh264/{lib,include}
           # Manual install (no install target bug)
           cp libopenh264.so* /tmp/oh264/lib/
-          cp api/*.h /tmp/oh264/include/
+          # Headers estan en codec/api/wels/, no en api/
+          cp codec/api/wels/*.h /tmp/oh264/include/
           echo "=== openh264 for aarch64 ==="
           aarch64-linux-gnu-readelf -h /tmp/oh264/lib/libopenh264.so 2>/dev/null | grep -E "Class|Machine"
           ls -lh /tmp/oh264/lib/
